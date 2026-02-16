@@ -97,6 +97,9 @@ RUN sh -c "$(curl -fsSL https://github.com/deluan/zsh-in-docker/releases/downloa
   -p git \
   -x
 
+# Copy shell completions
+COPY --chown=vscode:vscode completions/_claude /home/vscode/.zsh/completions/_claude
+
 # Copy zsh configuration
 COPY --chown=vscode:vscode .zshrc /home/vscode/.zshrc.custom
 

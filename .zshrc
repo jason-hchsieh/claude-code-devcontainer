@@ -26,6 +26,8 @@ setopt PUSHD_IGNORE_DUPS       # Don't push duplicates
 setopt PUSHD_SILENT            # Don't print stack after pushd/popd
 
 # Completion
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit && compinit
 setopt COMPLETE_IN_WORD        # Complete from both ends of word
 setopt ALWAYS_TO_END           # Move cursor to end after completion
 
