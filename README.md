@@ -24,7 +24,7 @@ Running Claude with `bypassPermissions` on your host machine is risky—it can e
 - **For terminal workflows** (one-time install):
 
   ```bash
-  git clone https://github.com/trailofbits/claude-code-devcontainer ~/.claude-devcontainer
+  git clone https://github.com/jason-hchsieh/claude-code-devcontainer ~/.claude-devcontainer
   ~/.claude-devcontainer/install.sh self-install
   ```
 
@@ -91,7 +91,7 @@ devc shell      # Opens shell in container
    devc .
 
    # Option B: Clone manually
-   git clone https://github.com/trailofbits/claude-code-devcontainer .devcontainer/
+   git clone https://github.com/jason-hchsieh/claude-code-devcontainer .devcontainer/
    ```
 
 3. Open **your project folder** in VS Code, then:
