@@ -15,18 +15,20 @@ Running Claude with `bypassPermissions` on your host machine is risky—it can e
 
 ## Prerequisites
 
-- **Docker runtime** (one of):
+- **Container runtime** (one of):
   - [Docker Desktop](https://docker.com/products/docker-desktop) - ensure it's running
   - [OrbStack](https://orbstack.dev/)
+  - [Podman](https://podman.io/): `brew install podman && podman machine init && podman machine start`
   - [Colima](https://github.com/abiosoft/colima): `brew install colima docker && colima start`
 
 - **For terminal workflows** (one-time install):
 
   ```bash
-  npm install -g @devcontainers/cli
   git clone https://github.com/trailofbits/claude-code-devcontainer ~/.claude-devcontainer
   ~/.claude-devcontainer/install.sh self-install
   ```
+
+  The `devc` CLI uses `npx @devcontainers/cli` automatically if the devcontainer CLI is not globally installed. If you prefer a global install: `npm install -g @devcontainers/cli`.
 
 <details>
 <summary><strong>Optimizing Colima for Apple Silicon</strong></summary>
@@ -206,15 +208,17 @@ Volumes are stored outside the container, so your shell history, Claude settings
 
 ### "devcontainer CLI not found"
 
+The `devc` CLI falls back to `npx @devcontainers/cli` automatically. If you don't have `npx`, install Node.js or install the CLI globally:
+
 ```bash
 npm install -g @devcontainers/cli
 ```
 
 ### Container won't start
 
-1. Check Docker is running
+1. Check your container runtime is running (Docker, Podman, OrbStack, or Colima)
 2. Try rebuilding: `devc rebuild`
-3. Check logs: `docker logs $(docker ps -lq)`
+3. Check logs: `docker logs $(docker ps -lq)` (or `podman logs $(podman ps -lq)`)
 
 ### GitHub CLI auth not persisting
 
@@ -239,12 +243,12 @@ uv run --with requests py.py  # Ad-hoc dependency
 Build the image manually:
 
 ```bash
-devcontainer build --workspace-folder .
+npx @devcontainers/cli build --workspace-folder .
 ```
 
 Test the container:
 
 ```bash
-devcontainer up --workspace-folder .
-devcontainer exec --workspace-folder . zsh
+npx @devcontainers/cli up --workspace-folder .
+npx @devcontainers/cli exec --workspace-folder . zsh
 ```

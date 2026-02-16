@@ -68,12 +68,39 @@ log_error() {
   echo -e "${RED}[devc]${NC} $1" >&2
 }
 
-check_devcontainer_cli() {
-  if ! command -v devcontainer &>/dev/null; then
-    log_error "devcontainer CLI not found."
-    log_info "Install it with: npm install -g @devcontainers/cli"
+CONTAINER_RUNTIME=""
+DEVCONTAINER_CMD=""
+DOCKER_PATH_FLAG=""
+
+detect_container_runtime() {
+  if [[ -n "$CONTAINER_RUNTIME" ]]; then return; fi
+  if command -v docker &>/dev/null; then
+    CONTAINER_RUNTIME="docker"
+  elif command -v podman &>/dev/null; then
+    CONTAINER_RUNTIME="podman"
+    DOCKER_PATH_FLAG="--docker-path podman"
+  else
+    log_error "No container runtime found. Install Docker or Podman."
     exit 1
   fi
+}
+
+detect_devcontainer_cli() {
+  if [[ -n "$DEVCONTAINER_CMD" ]]; then return; fi
+  if command -v devcontainer &>/dev/null; then
+    DEVCONTAINER_CMD="devcontainer"
+  elif command -v npx &>/dev/null; then
+    DEVCONTAINER_CMD="npx @devcontainers/cli"
+  else
+    log_error "devcontainer CLI not found."
+    log_info "Install Node.js and use: npx @devcontainers/cli"
+    exit 1
+  fi
+}
+
+check_devcontainer_cli() {
+  detect_container_runtime
+  detect_devcontainer_cli
 }
 
 check_no_sys_admin() {
@@ -224,7 +251,7 @@ cmd_up() {
   check_no_sys_admin "$workspace_folder"
   log_info "Starting devcontainer in $workspace_folder..."
 
-  devcontainer up --workspace-folder "$workspace_folder"
+  $DEVCONTAINER_CMD up $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder"
   log_success "Devcontainer started"
 }
 
@@ -236,7 +263,7 @@ cmd_rebuild() {
   check_no_sys_admin "$workspace_folder"
   log_info "Rebuilding devcontainer in $workspace_folder..."
 
-  devcontainer up --workspace-folder "$workspace_folder" --remove-existing-container
+  $DEVCONTAINER_CMD up $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" --remove-existing-container
   log_success "Devcontainer rebuilt"
 }
 
@@ -250,10 +277,10 @@ cmd_down() {
   # Get container ID and stop it
   local label="devcontainer.local_folder=$workspace_folder"
   local container_id
-  container_id=$(docker ps -q --filter "label=$label" 2>/dev/null || true)
+  container_id=$($CONTAINER_RUNTIME ps -q --filter "label=$label" 2>/dev/null || true)
 
   if [[ -n "$container_id" ]]; then
-    docker stop "$container_id"
+    $CONTAINER_RUNTIME stop "$container_id"
     log_success "Devcontainer stopped"
   else
     log_warn "No running devcontainer found for $workspace_folder"
@@ -267,7 +294,7 @@ cmd_shell() {
   check_devcontainer_cli
   log_info "Opening shell in devcontainer..."
 
-  devcontainer exec --workspace-folder "$workspace_folder" zsh
+  $DEVCONTAINER_CMD exec $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" zsh
 }
 
 cmd_exec() {
@@ -275,7 +302,7 @@ cmd_exec() {
   workspace_folder="$(get_workspace_folder)"
 
   check_devcontainer_cli
-  devcontainer exec --workspace-folder "$workspace_folder" "$@"
+  $DEVCONTAINER_CMD exec $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" "$@"
 }
 
 cmd_upgrade() {
@@ -285,7 +312,7 @@ cmd_upgrade() {
   check_devcontainer_cli
   log_info "Upgrading Claude Code..."
 
-  devcontainer exec --workspace-folder "$workspace_folder" claude update
+  $DEVCONTAINER_CMD exec $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" claude update
 
   log_success "Claude Code upgraded"
 }
@@ -323,7 +350,7 @@ cmd_mount() {
   update_devcontainer_mounts "$devcontainer_json" "$host_path" "$container_path" "$readonly"
 
   log_info "Recreating container with new mount..."
-  devcontainer up --workspace-folder "$workspace_folder" --remove-existing-container
+  $DEVCONTAINER_CMD up $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" --remove-existing-container
 
   log_success "Mount added: $host_path → $container_path"
 }
