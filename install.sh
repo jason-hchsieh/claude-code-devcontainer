@@ -471,8 +471,11 @@ COMP
     ;;
   esac
 
-  log_info "Add to your shell profile:" >&2
-  echo "  eval \"\$(devc completion)\"" >&2
+  # Only show setup hint when run directly (not via eval in shell profile)
+  if [[ -t 1 ]]; then
+    log_info "Add to your shell profile:" >&2
+    echo "  eval \"\$(devc completion)\"" >&2
+  fi
 }
 
 cmd_dot() {

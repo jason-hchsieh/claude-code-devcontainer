@@ -1,6 +1,6 @@
 # Claude Code in a devcontainer
 
-A sandboxed development environment for running Claude Code with `bypassPermissions` safely enabled. Built at [Trail of Bits](https://www.trailofbits.com/) for security audit workflows.
+A sandboxed development environment for running Claude Code with `bypassPermissions` safely enabled.
 
 ## Why Use This?
 
@@ -129,6 +129,8 @@ devc upgrade        Upgrade Claude Code in the container
 devc mount SRC DST  Add a bind mount (host → container)
 devc template DIR   Copy devcontainer files to directory
 devc self-install   Install devc to ~/.local/bin
+devc self-update    Pull latest code and re-install devc
+devc completion     Output shell completion script
 ```
 
 ## File Sharing
