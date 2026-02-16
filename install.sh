@@ -32,7 +32,9 @@ Commands:
     down                Stop the devcontainer
     shell               Open a shell in the running container
     self-install        Install 'devc' command to ~/.local/bin
-    update              Update devc to the latest version
+    self-update         Pull latest code and re-install devc
+    update              Update devc to the latest version (alias: self-update)
+    completion          Output shell completion script
     template [dir]      Copy devcontainer template to directory (default: current)
     exec <cmd>          Execute a command in the running container
     upgrade             Upgrade Claude Code to latest version
@@ -45,7 +47,9 @@ Examples:
     devc rebuild                # Clean rebuild
     devc shell                  # Open interactive shell
     devc self-install           # Install devc to PATH
+    devc self-update            # Pull latest and re-install
     devc update                 # Update to latest version
+    devc completion             # Print shell completion script
     devc exec ls -la            # Run command in container
     devc upgrade                # Upgrade Claude Code to latest
     devc mount ~/data /data     # Add mount to container
@@ -400,6 +404,77 @@ cmd_update() {
   fi
 }
 
+cmd_self_update() {
+  cmd_update
+  cmd_self_install
+}
+
+cmd_completion() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-/bin/bash}")"
+
+  case "$shell_name" in
+  zsh)
+    cat <<'COMP'
+#compdef devc
+
+_devc() {
+  local -a commands
+  commands=(
+    '.:Install template and start container'
+    'up:Start the devcontainer'
+    'rebuild:Rebuild the devcontainer'
+    'down:Stop the devcontainer'
+    'shell:Open a shell in the container'
+    'exec:Execute a command in the container'
+    'upgrade:Upgrade Claude Code'
+    'mount:Add a bind mount'
+    'template:Copy devcontainer template'
+    'self-install:Install devc to PATH'
+    'self-update:Pull latest and re-install devc'
+    'update:Update devc to latest version'
+    'completion:Output shell completion script'
+    'help:Show help message'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+  else
+    case "${words[2]}" in
+    exec)
+      _normal
+      ;;
+    mount)
+      _files -/
+      ;;
+    template)
+      _files -/
+      ;;
+    esac
+  fi
+}
+
+compdef _devc devc
+COMP
+    ;;
+  *)
+    cat <<'COMP'
+_devc_completions() {
+  local commands=". up rebuild down shell exec upgrade mount template self-install self-update update completion help"
+  if [[ ${COMP_CWORD} -eq 1 ]]; then
+    COMPREPLY=($(compgen -W "$commands" -- "${COMP_WORDS[1]}"))
+  fi
+}
+
+complete -F _devc_completions devc
+COMP
+    ;;
+  esac
+
+  log_info "Add to your shell profile:" >&2
+  echo "  eval \"\$(devc completion)\"" >&2
+}
+
 cmd_dot() {
   # Install template and start container in one command
   cmd_template "."
@@ -445,8 +520,11 @@ main() {
   self-install)
     cmd_self_install
     ;;
-  update)
-    cmd_update
+  self-update | update)
+    cmd_self_update
+    ;;
+  completion)
+    cmd_completion
     ;;
   template)
     cmd_template "$@"
