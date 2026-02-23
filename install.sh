@@ -72,13 +72,13 @@ log_error() {
   echo -e "${RED}[devc]${NC} $1" >&2
 }
 
-CONTAINER_RUNTIME=""
-DEVCONTAINER_CMD=""
-DOCKER_PATH_FLAG=""
+CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-}"
+DEVCONTAINER_CMD="${DEVCONTAINER_CMD:-}"
+DOCKER_PATH_FLAG="${DOCKER_PATH_FLAG:-}"
 
 _setup_podman() {
   DOCKER_PATH_FLAG="--docker-path podman"
-  if [[ -z "$DOCKER_HOST" ]]; then
+  if [[ -z "${DOCKER_HOST:-}" ]]; then
     DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
     export DOCKER_HOST
   fi
