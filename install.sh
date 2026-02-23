@@ -76,13 +76,24 @@ CONTAINER_RUNTIME=""
 DEVCONTAINER_CMD=""
 DOCKER_PATH_FLAG=""
 
+_setup_podman() {
+  DOCKER_PATH_FLAG="--docker-path podman"
+  if [[ -z "$DOCKER_HOST" ]]; then
+    DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+    export DOCKER_HOST
+  fi
+}
+
 detect_container_runtime() {
-  if [[ -n "$CONTAINER_RUNTIME" ]]; then return; fi
+  if [[ -n "$CONTAINER_RUNTIME" ]]; then
+    [[ "$CONTAINER_RUNTIME" == "podman" ]] && _setup_podman
+    return
+  fi
   if command -v docker &>/dev/null; then
     CONTAINER_RUNTIME="docker"
   elif command -v podman &>/dev/null; then
     CONTAINER_RUNTIME="podman"
-    DOCKER_PATH_FLAG="--docker-path podman"
+    _setup_podman
   else
     log_error "No container runtime found. Install Docker or Podman."
     exit 1
