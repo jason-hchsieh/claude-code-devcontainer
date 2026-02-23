@@ -19,6 +19,7 @@ Running Claude with `bypassPermissions` on your host machine is risky—it can e
   - [Docker Desktop](https://docker.com/products/docker-desktop) - ensure it's running
   - [OrbStack](https://orbstack.dev/)
   - [Podman](https://podman.io/): `brew install podman && podman machine init && podman machine start`
+    - Set `CONTAINER_RUNTIME=podman` when calling `devc` (see [Using Podman](#using-podman))
   - [Colima](https://github.com/abiosoft/colima): `brew install colima docker && colima start`
 
 - **For terminal workflows** (one-time install):
@@ -205,6 +206,24 @@ The container auto-configures `bypassPermissions` mode—Claude runs commands wi
 | Auto-configured | [anthropics](https://github.com/anthropics/claude-code-plugins) + [trailofbits](https://github.com/trailofbits/claude-code-plugins) skills, git-delta |
 
 Volumes are stored outside the container, so your shell history, Claude settings, and `gh` login persist even after `devc rebuild`. Host `~/.gitconfig` is mounted read-only for git identity.
+
+## Using Podman
+
+Pass `CONTAINER_RUNTIME=podman` to any `devc` command:
+
+```bash
+CONTAINER_RUNTIME=podman devc .
+CONTAINER_RUNTIME=podman devc shell
+CONTAINER_RUNTIME=podman devc rebuild
+```
+
+To avoid typing it every time, export it in your shell profile:
+
+```bash
+export CONTAINER_RUNTIME=podman
+```
+
+`devc` will automatically set `--docker-path podman` for the devcontainer CLI and configure `DOCKER_HOST` to point to the Podman socket (`unix:///run/user/<uid>/podman/podman.sock`) if it isn't already set.
 
 ## Troubleshooting
 
