@@ -2,6 +2,7 @@
 """Post-install configuration for Claude Code devcontainer.
 
 Runs on container creation to set up:
+- Onboarding bypass (when CLAUDE_CODE_OAUTH_TOKEN is set)
 - Claude settings (bypassPermissions mode)
 - Tmux configuration (200k history, mouse support)
 - Directory ownership fixes for mounted volumes
@@ -13,6 +14,80 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+def setup_onboarding_bypass():
+    """Bypass the interactive onboarding wizard when CLAUDE_CODE_OAUTH_TOKEN is set.
+
+    Runs `claude -p` to seed ~/.claude.json with auth state. The subprocess
+    writes the config file during startup before the API call completes, so
+    a timeout is expected and acceptable. After the subprocess finishes (or
+    times out), we check whether ~/.claude.json was populated and only then
+    set hasCompletedOnboarding.
+
+    Workaround for https://github.com/anthropics/claude-code/issues/8938.
+    """
+    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if not token:
+        print(
+            "[post_install] No CLAUDE_CODE_OAUTH_TOKEN set, skipping onboarding bypass",
+            file=sys.stderr,
+        )
+        return
+
+    claude_json = Path.home() / ".claude.json"
+
+    print("[post_install] Running claude -p to populate auth state...", file=sys.stderr)
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "ok"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            print(
+                f"[post_install] claude -p exited {result.returncode}: "
+                f"{result.stderr.strip()}",
+                file=sys.stderr,
+            )
+    except subprocess.TimeoutExpired:
+        print(
+            "[post_install] claude -p timed out (expected on cold start)",
+            file=sys.stderr,
+        )
+    except (FileNotFoundError, OSError) as e:
+        print(
+            f"[post_install] Warning: could not run claude ({e}) — "
+            "onboarding bypass skipped",
+            file=sys.stderr,
+        )
+        return
+
+    if not claude_json.exists():
+        print(
+            f"[post_install] Warning: {claude_json} not created by claude -p — "
+            "onboarding bypass skipped",
+            file=sys.stderr,
+        )
+        return
+
+    config: dict = {}
+    try:
+        config = json.loads(claude_json.read_text())
+    except json.JSONDecodeError as e:
+        print(
+            f"[post_install] Warning: {claude_json} has invalid JSON ({e}), "
+            "starting fresh",
+            file=sys.stderr,
+        )
+
+    config["hasCompletedOnboarding"] = True
+
+    claude_json.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"[post_install] Onboarding bypass configured: {claude_json}", file=sys.stderr
+    )
 
 
 def setup_claude_settings():
@@ -35,7 +110,9 @@ def setup_claude_settings():
         settings["permissions"]["defaultMode"] = "bypassPermissions"
 
     settings_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    print(f"[post_install] Claude settings configured: {settings_file}", file=sys.stderr)
+    print(
+        f"[post_install] Claude settings configured: {settings_file}", file=sys.stderr
+    )
 
 
 def setup_tmux_config():
@@ -107,7 +184,9 @@ def fix_directory_ownership():
                         check=True,
                         capture_output=True,
                     )
-                    print(f"[post_install] Fixed ownership: {dir_path}", file=sys.stderr)
+                    print(
+                        f"[post_install] Fixed ownership: {dir_path}", file=sys.stderr
+                    )
             except (PermissionError, subprocess.CalledProcessError) as e:
                 print(
                     f"[post_install] Warning: Could not fix ownership of {dir_path}: {e}",
@@ -207,15 +286,21 @@ node_modules/
 
 [diff]
     colorMoved = default
+
+[gpg "ssh"]
+    program = /usr/bin/ssh-keygen
 """
     local_gitconfig.write_text(local_config, encoding="utf-8")
-    print(f"[post_install] Local git config created: {local_gitconfig}", file=sys.stderr)
+    print(
+        f"[post_install] Local git config created: {local_gitconfig}", file=sys.stderr
+    )
 
 
 def main():
     """Run all post-install configuration."""
     print("[post_install] Starting post-install configuration...", file=sys.stderr)
 
+    setup_onboarding_bypass()
     setup_claude_settings()
     setup_tmux_config()
     fix_directory_ownership()
