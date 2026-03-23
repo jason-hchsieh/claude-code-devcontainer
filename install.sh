@@ -350,6 +350,19 @@ cmd_mount() {
 
   [[ "${3:-}" == "--readonly" ]] && readonly="true"
 
+  # Block mounts to security-sensitive container paths
+  local -a protected_paths=(
+    "/workspace/.devcontainer"
+    "/home/vscode/.claude"
+    "/home/vscode/.local"
+  )
+  for p in "${protected_paths[@]}"; do
+    if [[ "$container_path" == "$p" || "$container_path" == "$p/"* ]]; then
+      log_error "Cannot mount to protected path: $container_path"
+      exit 1
+    fi
+  done
+
   # Expand and validate host path
   host_path="$(cd "$host_path" 2>/dev/null && pwd)" || {
     log_error "Host path does not exist: $1"
