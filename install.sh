@@ -127,10 +127,11 @@ check_no_sys_admin() {
   local workspace="${1:-.}"
   local dc_json="$workspace/.devcontainer/devcontainer.json"
   [[ -f "$dc_json" ]] || return 0
-  if jq -e \
-    '.runArgs[]? | select(test("SYS_ADMIN"))' \
-    "$dc_json" >/dev/null 2>&1; then
-    log_error "SYS_ADMIN capability detected in runArgs."
+  if jq -e '
+    (.runArgs[]? | select(test("SYS_ADMIN"))) //
+    (.capAdd[]? | select(. == "SYS_ADMIN"))
+  ' "$dc_json" >/dev/null 2>&1; then
+    log_error "SYS_ADMIN capability detected in devcontainer.json."
     log_error "This defeats the read-only .devcontainer mount."
     exit 1
   fi
