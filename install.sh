@@ -156,6 +156,7 @@ extract_mounts_to_file() {
   [[ -f "$devcontainer_json" ]] || return 0
 
   temp_file=$(mktemp)
+  trap 'rm -f "$temp_file"' RETURN
 
   # Filter out default mounts by target path (immune to project name changes)
   local custom_mounts
@@ -173,10 +174,11 @@ extract_mounts_to_file() {
 
   if [[ -n "$custom_mounts" ]]; then
     echo "$custom_mounts" >"$temp_file"
+    # Clear the trap so the caller is responsible for cleanup
+    trap - RETURN
     echo "$temp_file"
-  else
-    rm -f "$temp_file"
   fi
+  # If custom_mounts is empty, the RETURN trap removes temp_file automatically
 }
 
 # Merge preserved mounts back into devcontainer.json
