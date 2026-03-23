@@ -73,11 +73,16 @@ log_error() {
 }
 
 CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-}"
-DEVCONTAINER_CMD="${DEVCONTAINER_CMD:-}"
-DOCKER_PATH_FLAG="${DOCKER_PATH_FLAG:-}"
+# Support env var override: split string into array if set
+if [[ -n "${DEVCONTAINER_CMD:-}" ]]; then
+  read -ra DEVCONTAINER_CMD <<< "$DEVCONTAINER_CMD"
+else
+  DEVCONTAINER_CMD=()
+fi
+DOCKER_PATH_ARGS=()
 
 _setup_podman() {
-  DOCKER_PATH_FLAG="--docker-path podman"
+  DOCKER_PATH_ARGS=(--docker-path podman)
   if [[ -z "${DOCKER_HOST:-}" ]]; then
     DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
     export DOCKER_HOST
@@ -101,11 +106,11 @@ detect_container_runtime() {
 }
 
 detect_devcontainer_cli() {
-  if [[ -n "$DEVCONTAINER_CMD" ]]; then return; fi
+  if [[ ${#DEVCONTAINER_CMD[@]} -gt 0 ]]; then return; fi
   if command -v devcontainer &>/dev/null; then
-    DEVCONTAINER_CMD="devcontainer"
+    DEVCONTAINER_CMD=(devcontainer)
   elif command -v npx &>/dev/null; then
-    DEVCONTAINER_CMD="npx @devcontainers/cli"
+    DEVCONTAINER_CMD=(npx @devcontainers/cli)
   else
     log_error "devcontainer CLI not found."
     log_info "Install Node.js and use: npx @devcontainers/cli"
@@ -267,7 +272,7 @@ cmd_up() {
   check_no_sys_admin "$workspace_folder"
   log_info "Starting devcontainer in $workspace_folder..."
 
-  $DEVCONTAINER_CMD up $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder"
+  "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder"
   log_success "Devcontainer started"
 }
 
@@ -279,7 +284,7 @@ cmd_rebuild() {
   check_no_sys_admin "$workspace_folder"
   log_info "Rebuilding devcontainer in $workspace_folder..."
 
-  $DEVCONTAINER_CMD up $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" --remove-existing-container
+  "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" --remove-existing-container
   log_success "Devcontainer rebuilt"
 }
 
@@ -310,7 +315,7 @@ cmd_shell() {
   check_devcontainer_cli
   log_info "Opening shell in devcontainer..."
 
-  $DEVCONTAINER_CMD exec $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" zsh
+  "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" zsh
 }
 
 cmd_exec() {
@@ -318,7 +323,7 @@ cmd_exec() {
   workspace_folder="$(get_workspace_folder)"
 
   check_devcontainer_cli
-  $DEVCONTAINER_CMD exec $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" "$@"
+  "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" "$@"
 }
 
 cmd_upgrade() {
@@ -328,7 +333,7 @@ cmd_upgrade() {
   check_devcontainer_cli
   log_info "Upgrading Claude Code..."
 
-  $DEVCONTAINER_CMD exec $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" claude update
+  "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" claude update
 
   log_success "Claude Code upgraded"
 }
@@ -366,7 +371,7 @@ cmd_mount() {
   update_devcontainer_mounts "$devcontainer_json" "$host_path" "$container_path" "$readonly"
 
   log_info "Recreating container with new mount..."
-  $DEVCONTAINER_CMD up $DOCKER_PATH_FLAG --workspace-folder "$workspace_folder" --remove-existing-container
+  "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" --remove-existing-container
 
   log_success "Mount added: $host_path → $container_path"
 }
