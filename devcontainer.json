@@ -16,6 +16,7 @@
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW"
   ],
+  "// runArgs": "NET_ADMIN and NET_RAW are required for iptables-based network isolation (see README)",
   "init": true,
   "updateRemoteUserUID": true,
   "customizations": {

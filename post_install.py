@@ -28,10 +28,11 @@ def setup_claude_settings():
         with contextlib.suppress(json.JSONDecodeError):
             settings = json.loads(settings_file.read_text())
 
-    # Set bypassPermissions mode
+    # Set bypassPermissions mode only if not already configured
     if "permissions" not in settings:
         settings["permissions"] = {}
-    settings["permissions"]["defaultMode"] = "bypassPermissions"
+    if "defaultMode" not in settings["permissions"]:
+        settings["permissions"]["defaultMode"] = "bypassPermissions"
 
     settings_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     print(f"[post_install] Claude settings configured: {settings_file}", file=sys.stderr)
@@ -129,8 +130,11 @@ def setup_global_gitignore():
     local_gitconfig = home / ".gitconfig.local"
     host_gitconfig = home / ".gitconfig"
 
-    # Create global gitignore with common patterns
-    patterns = """\
+    # Create global gitignore with common patterns (skip if user-customized)
+    if gitignore.exists():
+        print(f"[post_install] Global gitignore exists, skipping: {gitignore}", file=sys.stderr)
+    else:
+        patterns = """\
 # Claude Code
 .claude/
 
@@ -169,11 +173,15 @@ node_modules/
 .env.local
 .env.*.local
 """
-    gitignore.write_text(patterns, encoding="utf-8")
-    print(f"[post_install] Global gitignore created: {gitignore}", file=sys.stderr)
+        gitignore.write_text(patterns, encoding="utf-8")
+        print(f"[post_install] Global gitignore created: {gitignore}", file=sys.stderr)
 
     # Create local git config that includes host config and sets excludesfile + delta
     # Delta config is included here so it works even if host doesn't have it configured
+    if local_gitconfig.exists():
+        print(f"[post_install] Local git config exists, skipping: {local_gitconfig}", file=sys.stderr)
+        return
+
     local_config = f"""\
 # Container-local git config
 # Includes host config (mounted read-only) and adds container settings

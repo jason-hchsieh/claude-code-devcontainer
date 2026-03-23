@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   ripgrep \
   tmux \
   zsh \
-  # Build tools
+  # Build tools (needed for native Node.js addons and Python C extensions)
   build-essential \
   # Utilities
   jq \
@@ -73,7 +73,8 @@ USER vscode
 # Set PATH early so claude and other user-installed binaries are available
 ENV PATH="/home/vscode/.local/bin:$PATH"
 
-# Install Claude Code
+# Install Claude Code (unpinned: official installer does not support version pinning;
+# accepted risk since container itself is the security boundary)
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Install Python 3.13 via uv (fast binary download, not source compilation)
@@ -90,6 +91,9 @@ RUN curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_D
   eval "$(fnm env)" && \
   fnm install ${NODE_VERSION} && \
   fnm default ${NODE_VERSION}
+
+# Make Node.js available in non-interactive contexts (e.g. docker exec, postCreateCommand)
+ENV PATH="/home/vscode/.fnm/aliases/default/bin:$FNM_DIR:$PATH"
 
 # Install Oh My Zsh
 ARG ZSH_IN_DOCKER_VERSION=1.2.1
