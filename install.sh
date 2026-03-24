@@ -39,6 +39,7 @@ Commands:
     upgrade             Upgrade Claude Code to latest version
     mount <host> <cont> Add a mount to the devcontainer (recreates container)
     ssh                 Configure SSH agent forwarding in the container
+    ssh-stop            Stop the SSH agent tunnel (Podman Machine only)
     sync [project] [--trusted]  Sync sessions from devcontainers to host
     cp <cont> <host>    Copy files/directories from container to host
     destroy [-f] [dir]  Remove container, volumes, and image for a project
@@ -56,6 +57,7 @@ Examples:
     devc upgrade                # Upgrade Claude Code to latest
     devc mount ~/data /data     # Add mount to container
     devc ssh                    # Set up SSH agent forwarding
+    devc ssh-stop               # Stop SSH agent tunnel
     devc sync                   # Sync sessions from all devcontainers
     devc sync crypto            # Sync only matching devcontainer
     devc cp /some/file ./out    # Copy a path from container to host
@@ -629,6 +631,8 @@ verify_ssh_agent() {
   if echo "$ssh_output" | grep -q "Could not open a connection"; then
     if [[ "$SSH_SOCKET_SOURCE" == "$DOCKER_DESKTOP_SSH_SOCK" ]]; then
       log_error "Connection refused. In Docker Desktop, check that SSH agent forwarding is enabled."
+    elif [[ "$SSH_SOCKET_SOURCE" == "$PODMAN_VM_SSH_SOCK" ]]; then
+      log_error "SSH tunnel may have stopped. Run 'devc ssh' to restart it."
     else
       log_error "Host SSH agent may have stopped. Check 'ssh-add -l' on the host."
     fi
@@ -707,6 +711,10 @@ cmd_ssh() {
 
   # Verify SSH agent inside container
   verify_ssh_agent "$workspace_folder"
+}
+
+cmd_ssh_stop() {
+  stop_ssh_tunnel
 }
 
 cmd_sync() {
@@ -1038,6 +1046,7 @@ _devc() {
     'upgrade:Upgrade Claude Code'
     'mount:Add a bind mount'
     'ssh:Configure SSH agent forwarding'
+    'ssh-stop:Stop SSH agent tunnel'
     'sync:Sync sessions from devcontainers to host'
     'cp:Copy files from container to host'
     'destroy:Remove container, volumes, and image'
@@ -1072,7 +1081,7 @@ COMP
   *)
     cat <<'COMP'
 _devc_completions() {
-  local commands=". up rebuild down shell exec upgrade mount ssh sync cp destroy template self-install self-update update completion help"
+  local commands=". up rebuild down shell exec upgrade mount ssh ssh-stop sync cp destroy template self-install self-update update completion help"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=($(compgen -W "$commands" -- "${COMP_WORDS[1]}"))
   fi
@@ -1243,6 +1252,9 @@ cmd_destroy() {
     fi
   fi
 
+  # Clean up SSH tunnel if running (Podman Machine only)
+  stop_ssh_tunnel 2>/dev/null
+
   log_success "All resources destroyed for $workspace_folder"
 }
 
@@ -1291,6 +1303,9 @@ main() {
     ;;
   ssh)
     cmd_ssh
+    ;;
+  ssh-stop)
+    cmd_ssh_stop
     ;;
   sync)
     cmd_sync "$@"
