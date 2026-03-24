@@ -261,6 +261,28 @@ detect_ssh_socket() {
     fi
   fi
 
+  # macOS + Podman Machine: tunnel agent into VM via SSH -R
+  if [[ "$os" == "Darwin" ]] && detect_podman_machine; then
+    # Host SSH_AUTH_SOCK must be valid for the tunnel source
+    if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
+      log_error "No SSH agent detected."
+      log_info "Start one with: eval \$(ssh-agent -s) && ssh-add"
+      return 1
+    fi
+    if [[ ! -S "$SSH_AUTH_SOCK" ]]; then
+      log_error "SSH_AUTH_SOCK points to '$SSH_AUTH_SOCK' but the socket doesn't exist."
+      return 1
+    fi
+
+    # Start the tunnel (idempotent — skips if already running)
+    if ! start_ssh_tunnel; then
+      return 1
+    fi
+
+    SSH_SOCKET_SOURCE="$PODMAN_VM_SSH_SOCK"
+    return 0
+  fi
+
   # All other platforms: use host SSH_AUTH_SOCK
   if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
     log_error "No SSH agent detected."
@@ -468,6 +490,111 @@ cmd_mount() {
 
 SSH_CONTAINER_TARGET="/tmp/ssh-agent.sock"
 DOCKER_DESKTOP_SSH_SOCK="/run/host-services/ssh-auth.sock"
+PODMAN_VM_SSH_SOCK="/tmp/devc-ssh-agent.sock"
+DEVC_STATE_DIR="${HOME}/.local/state/devc"
+SSH_TUNNEL_PIDFILE="${DEVC_STATE_DIR}/ssh-tunnel.pid"
+
+# Detect if we're running on a Podman Machine.
+# Sets PODMAN_SSH_PORT, PODMAN_SSH_KEY, PODMAN_SSH_USER on success.
+# Returns 1 if not Podman Machine or not running.
+detect_podman_machine() {
+  command -v podman &>/dev/null || return 1
+  local inspect
+  inspect=$(podman machine inspect 2>/dev/null) || return 1
+
+  local state
+  state=$(echo "$inspect" | jq -r '.[0].State' 2>/dev/null)
+  [[ "$state" == "running" ]] || return 1
+
+  PODMAN_SSH_PORT=$(echo "$inspect" | jq -r '.[0].SSHConfig.Port')
+  PODMAN_SSH_KEY=$(echo "$inspect" | jq -r '.[0].SSHConfig.IdentityPath')
+  PODMAN_SSH_USER=$(echo "$inspect" | jq -r '.[0].SSHConfig.RemoteUsername')
+  return 0
+}
+
+# Start an SSH tunnel forwarding host SSH agent into the Podman VM.
+# Creates a stable socket at PODMAN_VM_SSH_SOCK inside the VM.
+# Requires: PODMAN_SSH_PORT, PODMAN_SSH_KEY, PODMAN_SSH_USER set by detect_podman_machine()
+start_ssh_tunnel() {
+  mkdir -p "$DEVC_STATE_DIR"
+
+  # Reuse existing tunnel if still alive
+  if [[ -f "$SSH_TUNNEL_PIDFILE" ]]; then
+    local old_pid
+    old_pid=$(cat "$SSH_TUNNEL_PIDFILE")
+    if kill -0 "$old_pid" 2>/dev/null; then
+      log_info "SSH tunnel already running (PID $old_pid)"
+      return 0
+    fi
+    rm -f "$SSH_TUNNEL_PIDFILE"
+  fi
+
+  # Clean up any stale socket inside the VM so SSH -R can bind
+  podman machine ssh -- rm -f "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
+
+  log_info "Starting SSH agent tunnel into Podman VM..."
+
+  # Background with & to capture PID directly (ssh -f makes PID capture unreliable)
+  # Host key checking disabled: Podman VM regenerates keys on recreation
+  ssh -N \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR \
+    -o ExitOnForwardFailure=yes \
+    -i "$PODMAN_SSH_KEY" \
+    -p "$PODMAN_SSH_PORT" \
+    -R "$PODMAN_VM_SSH_SOCK:${SSH_AUTH_SOCK}" \
+    "${PODMAN_SSH_USER}@localhost" &
+  local tunnel_pid=$!
+
+  # Brief wait for SSH to establish the forwarding
+  sleep 1
+
+  # Verify the tunnel process is still alive (authentication/forwarding failure exits immediately)
+  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+    log_error "SSH tunnel failed to start. Check that Podman Machine is running."
+    return 1
+  fi
+
+  # Verify the socket was created inside the VM
+  if ! podman machine ssh -- test -S "$PODMAN_VM_SSH_SOCK" 2>/dev/null; then
+    kill "$tunnel_pid" 2>/dev/null || true
+    log_error "SSH tunnel started but socket not created in VM."
+    log_info "The VM's sshd may not support StreamLocalBindUnlink. Try: devc ssh again."
+    return 1
+  fi
+
+  echo "$tunnel_pid" > "$SSH_TUNNEL_PIDFILE"
+
+  # Relax socket permissions so containers (which may run as different UIDs) can access it
+  podman machine ssh -- chmod 660 "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
+
+  log_success "SSH tunnel started (PID $tunnel_pid)"
+}
+
+# Stop the SSH agent tunnel.
+stop_ssh_tunnel() {
+  if [[ ! -f "$SSH_TUNNEL_PIDFILE" ]]; then
+    log_info "No SSH tunnel PID file found"
+    return 0
+  fi
+
+  local pid
+  pid=$(cat "$SSH_TUNNEL_PIDFILE")
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid"
+    log_success "SSH tunnel stopped (PID $pid)"
+  else
+    log_info "SSH tunnel was not running (stale PID $pid)"
+  fi
+
+  rm -f "$SSH_TUNNEL_PIDFILE"
+
+  # Clean up VM-side socket
+  if command -v podman &>/dev/null; then
+    podman machine ssh -- rm -f "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
+  fi
+}
 
 # Verify SSH agent forwarding works inside the container
 # Requires: SSH_SOCKET_SOURCE set by detect_ssh_socket()
