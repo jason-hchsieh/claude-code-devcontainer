@@ -32,8 +32,7 @@ Commands:
     down                Stop the devcontainer
     shell               Open a shell in the running container
     self-install        Install 'devc' command to ~/.local/bin
-    self-update         Pull latest code and re-install devc
-    update              Update devc to the latest version (alias: self-update)
+    self-update         Pull latest code and re-install devc (alias: update)
     completion          Output shell completion script
     template [dir]      Copy devcontainer template to directory (default: current)
     exec <cmd>          Execute a command in the running container
@@ -42,7 +41,7 @@ Commands:
     ssh                 Configure SSH agent forwarding in the container
     sync [project] [--trusted]  Sync sessions from devcontainers to host
     cp <cont> <host>    Copy files/directories from container to host
-    destroy [-f]        Remove container, volumes, and image for current project
+    destroy [-f] [dir]  Remove container, volumes, and image for a project
     help                Show this help message
 
 Examples:
@@ -51,8 +50,7 @@ Examples:
     devc rebuild                # Clean rebuild
     devc shell                  # Open interactive shell
     devc self-install           # Install devc to PATH
-    devc self-update            # Pull latest and re-install
-    devc update                 # Update to latest version
+    devc self-update            # Pull latest and re-install (or: devc update)
     devc completion             # Print shell completion script
     devc exec ls -la            # Run command in container
     devc upgrade                # Upgrade Claude Code to latest
@@ -166,7 +164,6 @@ extract_mounts_to_file() {
   [[ -f "$devcontainer_json" ]] || return 0
 
   temp_file=$(mktemp)
-  trap 'rm -f "$temp_file"' RETURN
 
   # Filter out default mounts by target path (immune to project name changes)
   local custom_mounts
@@ -184,11 +181,10 @@ extract_mounts_to_file() {
 
   if [[ -n "$custom_mounts" ]]; then
     echo "$custom_mounts" >"$temp_file"
-    # Clear the trap so the caller is responsible for cleanup
-    trap - RETURN
     echo "$temp_file"
+  else
+    rm -f "$temp_file"
   fi
-  # If custom_mounts is empty, the RETURN trap removes temp_file automatically
 }
 
 # Merge preserved mounts back into devcontainer.json
@@ -346,7 +342,7 @@ cmd_up() {
   check_no_sys_admin "$workspace_folder"
   log_info "Starting devcontainer in $workspace_folder..."
 
-  "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder"
+  "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder"
   log_success "Devcontainer started"
 }
 
@@ -358,7 +354,7 @@ cmd_rebuild() {
   check_no_sys_admin "$workspace_folder"
   log_info "Rebuilding devcontainer in $workspace_folder..."
 
-  "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" --remove-existing-container
+  "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" --remove-existing-container
   log_success "Devcontainer rebuilt"
 }
 
@@ -372,10 +368,10 @@ cmd_down() {
   # Get container ID and stop it
   local label="devcontainer.local_folder=$workspace_folder"
   local container_id
-  container_id=$($CONTAINER_RUNTIME ps -q --filter "label=$label" 2>/dev/null || true)
+  container_id=$("$CONTAINER_RUNTIME" ps -q --filter "label=$label" 2>/dev/null || true)
 
   if [[ -n "$container_id" ]]; then
-    $CONTAINER_RUNTIME stop "$container_id"
+    "$CONTAINER_RUNTIME" stop "$container_id"
     log_success "Devcontainer stopped"
   else
     log_warn "No running devcontainer found for $workspace_folder"
@@ -389,15 +385,20 @@ cmd_shell() {
   check_devcontainer_cli
   log_info "Opening shell in devcontainer..."
 
-  "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" zsh
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" zsh
 }
 
 cmd_exec() {
+  if [[ $# -eq 0 ]]; then
+    log_error "Usage: devc exec <command> [args...]"
+    exit 1
+  fi
+
   local workspace_folder
   workspace_folder="$(get_workspace_folder)"
 
   check_devcontainer_cli
-  "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" "$@"
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" "$@"
 }
 
 cmd_upgrade() {
@@ -407,7 +408,7 @@ cmd_upgrade() {
   check_devcontainer_cli
   log_info "Upgrading Claude Code..."
 
-  "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" claude update
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" claude update
 
   log_success "Claude Code upgraded"
 }
@@ -458,7 +459,7 @@ cmd_mount() {
   update_devcontainer_mounts "$devcontainer_json" "$host_path" "$container_path" "$readonly"
 
   log_info "Recreating container with new mount..."
-  "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" --remove-existing-container
+  "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" --remove-existing-container
 
   log_success "Mount added: $host_path → $container_path"
 }
@@ -484,7 +485,7 @@ verify_ssh_agent() {
   log_info "Verifying SSH agent forwarding..."
 
   # Check socket exists in container
-  if ! "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" \
+  if ! "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" \
     test -e "$SSH_CONTAINER_TARGET" 2>/dev/null; then
     log_error "Socket not mounted at $SSH_CONTAINER_TARGET inside container."
     log_info "Try 'devc ssh' again or 'devc rebuild'."
@@ -493,7 +494,7 @@ verify_ssh_agent() {
 
   # Check SSH agent responds
   local ssh_output
-  ssh_output=$("${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" \
+  ssh_output=$("${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" \
     env "SSH_AUTH_SOCK=$SSH_CONTAINER_TARGET" ssh-add -l 2>&1) || true
 
   if echo "$ssh_output" | grep -q "Could not open a connection"; then
@@ -572,7 +573,7 @@ cmd_ssh() {
   # Recreate container if changes were made
   if [[ "$needs_changes" == "true" ]]; then
     log_info "Recreating container with SSH agent forwarding..."
-    "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" --remove-existing-container
+    "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" --remove-existing-container
   fi
 
   # Verify SSH agent inside container
@@ -610,9 +611,11 @@ cmd_sync() {
     fi
   fi
 
+  detect_container_runtime
+
   # Discover all devcontainers (running + stopped) by label.
   local container_ids
-  container_ids=$(docker ps -a -q \
+  container_ids=$("$CONTAINER_RUNTIME" ps -a -q \
     --filter "label=devcontainer.local_folder" 2>/dev/null || true)
 
   if [[ -z "$container_ids" ]]; then
@@ -623,12 +626,12 @@ cmd_sync() {
   # List discovered devcontainers.
   log_info "Discovered devcontainers:"
   local matched_any=false
+  local name folder status
   while IFS= read -r cid; do
-    local name folder status
     name=$(sync_get_project_name "$cid")
-    folder=$(docker inspect --format \
+    folder=$("$CONTAINER_RUNTIME" inspect --format \
       '{{index .Config.Labels "devcontainer.local_folder"}}' "$cid")
-    status=$(docker inspect --format '{{.State.Status}}' "$cid")
+    status=$("$CONTAINER_RUNTIME" inspect --format '{{.State.Status}}' "$cid")
 
     if [[ -n "$filter" ]]; then
       if ! echo "$name" | grep -qi "$filter"; then
@@ -644,11 +647,11 @@ cmd_sync() {
     log_error "No devcontainers matching '${filter}'."
     echo ""
     echo "Available:"
+    local name2 status2
     while IFS= read -r cid; do
-      local name status
-      name=$(sync_get_project_name "$cid")
-      status=$(docker inspect --format '{{.State.Status}}' "$cid")
-      echo "  - ${name} (${status})"
+      name2=$(sync_get_project_name "$cid")
+      status2=$("$CONTAINER_RUNTIME" inspect --format '{{.State.Status}}' "$cid")
+      echo "  - ${name2} (${status2})"
     done <<< "$container_ids"
     exit 1
   fi
@@ -657,7 +660,6 @@ cmd_sync() {
 
   # Sync matching containers.
   while IFS= read -r cid; do
-    local name
     name=$(sync_get_project_name "$cid")
 
     if [[ -n "$filter" ]]; then
@@ -676,20 +678,20 @@ cmd_sync() {
 # Extract project name from devcontainer.local_folder label.
 sync_get_project_name() {
   local folder
-  folder=$(docker inspect --format \
+  folder=$("$CONTAINER_RUNTIME" inspect --format \
     '{{index .Config.Labels "devcontainer.local_folder"}}' "$1")
   basename "$folder"
 }
 
 # Resolve the Claude projects dir inside a container without
-# docker exec (works on stopped containers too).
+# container exec (works on stopped containers too).
 # Reads CLAUDE_CONFIG_DIR from container env, falls back to
 # /home/<user>/.claude.
 sync_get_claude_projects_dir() {
   local cid="$1"
   local claude_dir
 
-  claude_dir=$(docker inspect --format '{{json .Config.Env}}' "$cid" \
+  claude_dir=$("$CONTAINER_RUNTIME" inspect --format '{{json .Config.Env}}' "$cid" \
     | tr ',' '\n' | tr -d '[]"' \
     | grep '^CLAUDE_CONFIG_DIR=' \
     | cut -d= -f2- || true)
@@ -700,7 +702,7 @@ sync_get_claude_projects_dir() {
   fi
 
   local user
-  user=$(docker inspect --format '{{.Config.User}}' "$cid")
+  user=$("$CONTAINER_RUNTIME" inspect --format '{{.Config.User}}' "$cid")
   if [[ -z "$user" || "$user" == "root" ]]; then
     echo "/root/.claude/projects"
   else
@@ -714,20 +716,20 @@ sync_one_container() {
   local project_name status claude_dir folder
 
   project_name=$(sync_get_project_name "$cid")
-  folder=$(docker inspect --format \
+  folder=$("$CONTAINER_RUNTIME" inspect --format \
     '{{index .Config.Labels "devcontainer.local_folder"}}' "$cid")
-  status=$(docker inspect --format '{{.State.Status}}' "$cid")
+  status=$("$CONTAINER_RUNTIME" inspect --format '{{.State.Status}}' "$cid")
   claude_dir=$(sync_get_claude_projects_dir "$cid")
 
   log_info "=== ${project_name} (${status}) ==="
   echo "  Host path:  ${folder}"
   echo "  Container:  ${cid:0:12}"
 
-  # docker cp works on both running and stopped containers.
+  # Container cp works on both running and stopped containers.
   local tmpdir
   tmpdir=$(mktemp -d)
 
-  if ! docker cp "${cid}:${claude_dir}/." "$tmpdir/" 2>/dev/null; then
+  if ! "$CONTAINER_RUNTIME" cp "${cid}:${claude_dir}/." "$tmpdir/" 2>/dev/null; then
     echo "  No sessions found, skipping."
     rm -rf "$tmpdir"
     return 0
@@ -819,10 +821,12 @@ cmd_cp() {
   local workspace_folder
   workspace_folder="$(get_workspace_folder)"
 
+  detect_container_runtime
+
   # Find the running container
   local label="devcontainer.local_folder=$workspace_folder"
   local container_id
-  container_id=$(docker ps -q --filter "label=$label" 2>/dev/null || true)
+  container_id=$("$CONTAINER_RUNTIME" ps -q --filter "label=$label" 2>/dev/null || true)
 
   if [[ -z "$container_id" ]]; then
     log_error "No running devcontainer found for $workspace_folder"
@@ -830,7 +834,7 @@ cmd_cp() {
   fi
 
   log_info "Copying $container_path → $host_path"
-  docker cp "$container_id:$container_path" "$host_path"
+  "$CONTAINER_RUNTIME" cp "$container_id:$container_path" "$host_path"
   log_success "Copied $container_path → $host_path"
 }
 
@@ -905,6 +909,9 @@ _devc() {
     'upgrade:Upgrade Claude Code'
     'mount:Add a bind mount'
     'ssh:Configure SSH agent forwarding'
+    'sync:Sync sessions from devcontainers to host'
+    'cp:Copy files from container to host'
+    'destroy:Remove container, volumes, and image'
     'template:Copy devcontainer template'
     'self-install:Install devc to PATH'
     'self-update:Pull latest and re-install devc'
@@ -936,7 +943,7 @@ COMP
   *)
     cat <<'COMP'
 _devc_completions() {
-  local commands=". up rebuild down shell exec upgrade mount ssh template self-install self-update update completion help"
+  local commands=". up rebuild down shell exec upgrade mount ssh sync cp destroy template self-install self-update update completion help"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=($(compgen -W "$commands" -- "${COMP_WORDS[1]}"))
   fi
@@ -973,23 +980,23 @@ discover_resources() {
   IMAGE_UID=""
 
   # Find container (any state: running, stopped, created, etc.)
-  CONTAINER_ID=$(docker ps -aq --filter "label=$label" 2>/dev/null | head -1)
+  CONTAINER_ID=$("$CONTAINER_RUNTIME" ps -aq --filter "label=$label" 2>/dev/null | head -1)
 
   if [[ -z "$CONTAINER_ID" ]]; then
     return 0
   fi
 
   # Get container status
-  CONTAINER_STATUS=$(docker inspect "$CONTAINER_ID" --format '{{.State.Status}}' 2>/dev/null || true)
+  CONTAINER_STATUS=$("$CONTAINER_RUNTIME" inspect "$CONTAINER_ID" --format '{{.State.Status}}' 2>/dev/null || true)
 
-  # Get volumes (docker volumes only, not bind mounts)
+  # Get volumes (named volumes only, not bind mounts)
   while IFS= read -r vol; do
     [[ -n "$vol" ]] && VOLUMES+=("$vol")
-  done < <(docker inspect "$CONTAINER_ID" --format '{{json .Mounts}}' 2>/dev/null \
+  done < <("$CONTAINER_RUNTIME" inspect "$CONTAINER_ID" --format '{{json .Mounts}}' 2>/dev/null \
     | jq -r '.[] | select(.Type == "volume") | .Name' 2>/dev/null)
 
   # Get image and its -uid variant
-  IMAGE=$(docker inspect "$CONTAINER_ID" --format '{{.Config.Image}}' 2>/dev/null || true)
+  IMAGE=$("$CONTAINER_RUNTIME" inspect "$CONTAINER_ID" --format '{{.Config.Image}}' 2>/dev/null || true)
   if [[ -n "$IMAGE" ]]; then
     if [[ "$IMAGE" == *-uid ]]; then
       IMAGE_UID="$IMAGE"
@@ -1007,7 +1014,7 @@ print_destroy_summary() {
 
   if [[ -n "$CONTAINER_ID" ]]; then
     local container_name
-    container_name=$(docker inspect "$CONTAINER_ID" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')
+    container_name=$("$CONTAINER_RUNTIME" inspect "$CONTAINER_ID" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')
     echo "  Container:  ${container_name:-$CONTAINER_ID}"
     if [[ "$CONTAINER_STATUS" == "running" ]]; then
       echo "              (currently running -- will be force-stopped)"
@@ -1023,7 +1030,7 @@ print_destroy_summary() {
 
   if [[ -n "$IMAGE" ]]; then
     echo "  Image:      $IMAGE"
-    if docker image inspect "$IMAGE_UID" &>/dev/null; then
+    if "$CONTAINER_RUNTIME" image inspect "$IMAGE_UID" &>/dev/null; then
       echo "              $IMAGE_UID"
     fi
   fi
@@ -1050,6 +1057,7 @@ cmd_destroy() {
   local workspace_folder
   workspace_folder="$(get_workspace_folder "${1:-}")"
 
+  detect_container_runtime
   discover_resources "$workspace_folder"
 
   # No resources found (idempotent behavior)
@@ -1084,25 +1092,25 @@ cmd_destroy() {
   # Deletion, in order: stop, remove container, volumes, images
   if [[ -n "$CONTAINER_ID" && "$CONTAINER_STATUS" == "running" ]]; then
     log_info "Stopping container..."
-    docker stop "$CONTAINER_ID" >/dev/null 2>&1 || true
+    "$CONTAINER_RUNTIME" stop "$CONTAINER_ID" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$CONTAINER_ID" ]]; then
     log_info "Removing container..."
-    docker rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true
+    "$CONTAINER_RUNTIME" rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true
   fi
 
-  for vol in "${VOLUMES[@]}"; do
+  for vol in ${VOLUMES[@]+"${VOLUMES[@]}"}; do
     log_info "Removing volume: $vol"
-    docker volume rm -f "$vol" >/dev/null 2>&1 || true
+    "$CONTAINER_RUNTIME" volume rm -f "$vol" >/dev/null 2>&1 || true
   done
 
   if [[ -n "$IMAGE" ]]; then
     log_info "Removing image: $IMAGE"
-    docker rmi -f "$IMAGE" >/dev/null 2>&1 || true
-    if docker image inspect "$IMAGE_UID" &>/dev/null 2>&1; then
+    "$CONTAINER_RUNTIME" rmi -f "$IMAGE" >/dev/null 2>&1 || true
+    if "$CONTAINER_RUNTIME" image inspect "$IMAGE_UID" &>/dev/null 2>&1; then
       log_info "Removing image: $IMAGE_UID"
-      docker rmi -f "$IMAGE_UID" >/dev/null 2>&1 || true
+      "$CONTAINER_RUNTIME" rmi -f "$IMAGE_UID" >/dev/null 2>&1 || true
     fi
   fi
 
@@ -1121,6 +1129,10 @@ main() {
 
   case "$command" in
   .)
+    if [[ $# -gt 0 ]]; then
+      log_error "'devc .' does not accept arguments (it always targets the current directory)"
+      exit 1
+    fi
     cmd_dot
     ;;
   up)
