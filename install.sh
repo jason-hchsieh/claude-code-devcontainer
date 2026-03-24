@@ -250,10 +250,12 @@ detect_ssh_socket() {
   os="$(uname -s)"
 
   # macOS + Docker Desktop: uses a built-in socket
+  # Positively identify Docker Desktop by its OS string to avoid false
+  # matches with OrbStack, Colima, or other Docker-compatible engines.
   if [[ "$os" == "Darwin" && "$CONTAINER_RUNTIME" == "docker" ]]; then
-    local docker_host
-    docker_host=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)
-    if [[ "$docker_host" != *".colima"* ]]; then
+    local docker_os
+    docker_os=$(docker info -f '{{.OperatingSystem}}' 2>/dev/null || true)
+    if [[ "$docker_os" == *"Docker Desktop"* ]]; then
       SSH_SOCKET_SOURCE="$DOCKER_DESKTOP_SSH_SOCK"
       return 0
     fi
