@@ -39,6 +39,7 @@ Commands:
     exec <cmd>          Execute a command in the running container
     upgrade             Upgrade Claude Code to latest version
     mount <host> <cont> Add a mount to the devcontainer (recreates container)
+    ssh                 Configure SSH agent forwarding in the container
     sync [project] [--trusted]  Sync sessions from devcontainers to host
     cp <cont> <host>    Copy files/directories from container to host
     destroy [-f]        Remove container, volumes, and image for current project
@@ -56,6 +57,7 @@ Examples:
     devc exec ls -la            # Run command in container
     devc upgrade                # Upgrade Claude Code to latest
     devc mount ~/data /data     # Add mount to container
+    devc ssh                    # Set up SSH agent forwarding
     devc sync                   # Sync sessions from all devcontainers
     devc sync crypto            # Sync only matching devcontainer
     devc cp /some/file ./out    # Copy a path from container to host
@@ -901,6 +903,7 @@ _devc() {
     'exec:Execute a command in the container'
     'upgrade:Upgrade Claude Code'
     'mount:Add a bind mount'
+    'ssh:Configure SSH agent forwarding'
     'template:Copy devcontainer template'
     'self-install:Install devc to PATH'
     'self-update:Pull latest and re-install devc'
@@ -932,7 +935,7 @@ COMP
   *)
     cat <<'COMP'
 _devc_completions() {
-  local commands=". up rebuild down shell exec upgrade mount template self-install self-update update completion help"
+  local commands=". up rebuild down shell exec upgrade mount ssh template self-install self-update update completion help"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=($(compgen -W "$commands" -- "${COMP_WORDS[1]}"))
   fi
@@ -1143,6 +1146,9 @@ main() {
     ;;
   mount)
     cmd_mount "$@"
+    ;;
+  ssh)
+    cmd_ssh
     ;;
   sync)
     cmd_sync "$@"
