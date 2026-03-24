@@ -277,8 +277,15 @@ detect_ssh_socket() {
   fi
 
   # Check for loaded keys (warning only, not blocking)
-  if ! ssh-add -l &>/dev/null; then
+  # ssh-add -l exits 1 = no keys, 2 = agent unreachable
+  local rc=0
+  ssh-add -l &>/dev/null || rc=$?
+  if [[ $rc -eq 1 ]]; then
     log_warn "SSH agent is running but has no keys loaded. Run 'ssh-add' to add your keys."
+  elif [[ $rc -eq 2 ]]; then
+    log_error "SSH agent socket exists but agent is not responding."
+    log_info "Restart with: eval \$(ssh-agent -s) && ssh-add"
+    return 1
   fi
 
   SSH_SOCKET_SOURCE="$SSH_AUTH_SOCK"
@@ -459,6 +466,7 @@ cmd_mount() {
 SSH_CONTAINER_TARGET="/tmp/ssh-agent.sock"
 
 # Verify SSH agent forwarding works inside the container
+# Requires: SSH_SOCKET_SOURCE set by detect_ssh_socket()
 verify_ssh_agent() {
   local workspace_folder="$1"
 
