@@ -532,7 +532,7 @@ start_ssh_tunnel() {
   fi
 
   # Clean up any stale socket inside the VM so SSH -R can bind
-  podman machine ssh -- rm -f "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
+  podman machine ssh -- sudo rm -f "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
 
   log_info "Starting SSH agent tunnel into Podman VM..."
 
@@ -568,8 +568,8 @@ start_ssh_tunnel() {
 
   echo "$tunnel_pid" > "$SSH_TUNNEL_PIDFILE"
 
-  # Relax socket permissions so containers (which may run as different UIDs) can access it
-  podman machine ssh -- chmod 660 "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
+  # Relax socket permissions so containers (which run under user namespace remapping) can access it
+  podman machine ssh -- chmod 666 "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
 
   log_success "SSH tunnel started (PID $tunnel_pid)"
 }
@@ -594,7 +594,7 @@ stop_ssh_tunnel() {
 
   # Clean up VM-side socket
   if command -v podman &>/dev/null; then
-    podman machine ssh -- rm -f "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
+    podman machine ssh -- sudo rm -f "$PODMAN_VM_SSH_SOCK" 2>/dev/null || true
   fi
 }
 
@@ -701,6 +701,21 @@ cmd_ssh() {
     update_devcontainer_env "$devcontainer_json" "SSH_AUTH_SOCK" "$SSH_CONTAINER_TARGET"
   else
     log_info "SSH_AUTH_SOCK already set in containerEnv"
+  fi
+
+  # Podman Machine: SELinux blocks socket access unless label checking is disabled
+  if [[ "$SSH_SOCKET_SOURCE" == "$PODMAN_VM_SSH_SOCK" ]]; then
+    local has_label_disable
+    has_label_disable=$(jq -r '(.runArgs // []) | map(select(. == "--security-opt" or . == "label=disable")) | length' "$devcontainer_json")
+    if [[ "$has_label_disable" -lt 2 ]]; then
+      needs_changes="true"
+      log_info "Adding --security-opt label=disable for Podman SELinux compatibility"
+      local updated
+      updated=$(jq '.runArgs = (.runArgs // []) + ["--security-opt", "label=disable"]' "$devcontainer_json")
+      echo "$updated" > "$devcontainer_json"
+    else
+      log_info "SELinux label=disable already configured"
+    fi
   fi
 
   # Recreate container if changes were made
