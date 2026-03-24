@@ -258,7 +258,7 @@ detect_ssh_socket() {
     local docker_host
     docker_host=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)
     if [[ "$docker_host" != *".colima"* ]]; then
-      SSH_SOCKET_SOURCE="/run/host-services/ssh-auth.sock"
+      SSH_SOCKET_SOURCE="$DOCKER_DESKTOP_SSH_SOCK"
       return 0
     fi
   fi
@@ -464,6 +464,7 @@ cmd_mount() {
 }
 
 SSH_CONTAINER_TARGET="/tmp/ssh-agent.sock"
+DOCKER_DESKTOP_SSH_SOCK="/run/host-services/ssh-auth.sock"
 
 # Verify SSH agent forwarding works inside the container
 # Requires: SSH_SOCKET_SOURCE set by detect_ssh_socket()
@@ -496,9 +497,7 @@ verify_ssh_agent() {
     env "SSH_AUTH_SOCK=$SSH_CONTAINER_TARGET" ssh-add -l 2>&1) || true
 
   if echo "$ssh_output" | grep -q "Could not open a connection"; then
-    local os
-    os="$(uname -s)"
-    if [[ "$os" == "Darwin" && "$SSH_SOCKET_SOURCE" == "/run/host-services/ssh-auth.sock" ]]; then
+    if [[ "$SSH_SOCKET_SOURCE" == "$DOCKER_DESKTOP_SSH_SOCK" ]]; then
       log_error "Connection refused. In Docker Desktop, check that SSH agent forwarding is enabled."
     else
       log_error "Host SSH agent may have stopped. Check 'ssh-add -l' on the host."
@@ -512,7 +511,6 @@ verify_ssh_agent() {
   fi
 
   log_success "SSH agent forwarding is working"
-  # Print each key
   while IFS= read -r line; do
     [[ -n "$line" ]] && log_info "  $line"
   done <<< "$ssh_output"
@@ -535,25 +533,20 @@ cmd_ssh() {
     exit 1
   fi
 
-  # Check existing state in devcontainer.json
-  local has_mount="false"
-  local has_env="false"
+  # Check existing state in devcontainer.json (single jq read)
   local current_mount_source=""
+  local current_env=""
   local needs_changes="false"
-
-  # Check if mount targeting SSH_CONTAINER_TARGET exists
-  current_mount_source=$(jq -r --arg target "$SSH_CONTAINER_TARGET" '
-    .mounts // [] | map(select(contains("target=" + $target))) | .[0] // ""
-  ' "$devcontainer_json")
-  [[ -n "$current_mount_source" ]] && has_mount="true"
-
-  # Check if containerEnv.SSH_AUTH_SOCK is set
-  local current_env
-  current_env=$(jq -r '.containerEnv.SSH_AUTH_SOCK // ""' "$devcontainer_json")
-  [[ "$current_env" == "$SSH_CONTAINER_TARGET" ]] && has_env="true"
+  local state_json
+  state_json=$(jq -r --arg target "$SSH_CONTAINER_TARGET" '{
+    mount: ((.mounts // []) | map(select(contains("target=" + $target))) | .[0] // ""),
+    env: (.containerEnv.SSH_AUTH_SOCK // "")
+  }' "$devcontainer_json")
+  current_mount_source=$(echo "$state_json" | jq -r '.mount')
+  current_env=$(echo "$state_json" | jq -r '.env')
 
   # Determine what needs to change
-  if [[ "$has_mount" == "false" ]]; then
+  if [[ -z "$current_mount_source" ]]; then
     needs_changes="true"
     log_info "Adding SSH agent socket mount: $SSH_SOCKET_SOURCE -> $SSH_CONTAINER_TARGET"
     update_devcontainer_mounts "$devcontainer_json" "$SSH_SOCKET_SOURCE" "$SSH_CONTAINER_TARGET" "false"
@@ -568,7 +561,7 @@ cmd_ssh() {
     fi
   fi
 
-  if [[ "$has_env" == "false" ]]; then
+  if [[ "$current_env" != "$SSH_CONTAINER_TARGET" ]]; then
     needs_changes="true"
     log_info "Setting SSH_AUTH_SOCK=$SSH_CONTAINER_TARGET in containerEnv"
     update_devcontainer_env "$devcontainer_json" "SSH_AUTH_SOCK" "$SSH_CONTAINER_TARGET"
