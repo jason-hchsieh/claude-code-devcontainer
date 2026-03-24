@@ -229,6 +229,20 @@ update_devcontainer_mounts() {
   echo "$updated" >"$devcontainer_json"
 }
 
+# Add or update an environment variable in devcontainer.json containerEnv
+update_devcontainer_env() {
+  local devcontainer_json="$1"
+  local key="$2"
+  local value="$3"
+
+  local updated
+  updated=$(jq --arg key "$key" --arg value "$value" '
+    .containerEnv[$key] = $value
+  ' "$devcontainer_json")
+
+  echo "$updated" >"$devcontainer_json"
+}
+
 cmd_template() {
   local target_dir="${1:-.}"
   target_dir="$(cd "$target_dir" 2>/dev/null && pwd)" || {
