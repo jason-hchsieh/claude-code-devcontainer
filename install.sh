@@ -243,6 +243,46 @@ update_devcontainer_env() {
   echo "$updated" >"$devcontainer_json"
 }
 
+# Detect the platform-specific SSH agent socket path.
+# Sets SSH_SOCKET_SOURCE on success.
+# Returns 1 with diagnostic guidance on failure.
+detect_ssh_socket() {
+  SSH_SOCKET_SOURCE=""
+  local os
+  os="$(uname -s)"
+
+  # macOS + Docker Desktop: uses a built-in socket
+  if [[ "$os" == "Darwin" && "$CONTAINER_RUNTIME" == "docker" ]]; then
+    local docker_host
+    docker_host=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)
+    if [[ "$docker_host" != *".colima"* ]]; then
+      SSH_SOCKET_SOURCE="/run/host-services/ssh-auth.sock"
+      return 0
+    fi
+  fi
+
+  # All other platforms: use host SSH_AUTH_SOCK
+  if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
+    log_error "No SSH agent detected."
+    log_info "Start one with: eval \$(ssh-agent -s) && ssh-add"
+    return 1
+  fi
+
+  if [[ ! -S "$SSH_AUTH_SOCK" ]]; then
+    log_error "SSH_AUTH_SOCK points to '$SSH_AUTH_SOCK' but the socket doesn't exist."
+    log_info "Your agent may have died. Restart with: eval \$(ssh-agent -s) && ssh-add"
+    return 1
+  fi
+
+  # Check for loaded keys (warning only, not blocking)
+  if ! ssh-add -l &>/dev/null; then
+    log_warn "SSH agent is running but has no keys loaded. Run 'ssh-add' to add your keys."
+  fi
+
+  SSH_SOCKET_SOURCE="$SSH_AUTH_SOCK"
+  return 0
+}
+
 cmd_template() {
   local target_dir="${1:-.}"
   target_dir="$(cd "$target_dir" 2>/dev/null && pwd)" || {
