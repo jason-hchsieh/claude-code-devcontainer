@@ -29,14 +29,12 @@ Rejected alternatives:
 **Container-side target:** `/tmp/ssh-agent.sock` (consistent across all platforms).
 
 **Detection logic:**
-1. If macOS and Docker Desktop is the container runtime, use the Docker Desktop socket.
-2. Otherwise, read `$SSH_AUTH_SOCK` from the host environment. Fail with platform-specific guidance if unset or missing.
+1. Check if macOS (`uname -s` = `Darwin`) and container runtime is `docker`.
+2. If so, probe for Docker Desktop by checking the Docker context: `docker context inspect` reveals the endpoint. Docker Desktop uses `unix:///var/run/docker.sock` with a Desktop-specific context name, while Colima uses a socket like `unix:///Users/<user>/.colima/default/docker.sock` or `unix:///Users/<user>/.colima/docker.sock`.
+3. Specifically: run `docker context inspect --format '{{.Endpoints.docker.Host}}'`. If the socket path contains `.colima`, treat as Colima (use `$SSH_AUTH_SOCK`). Otherwise, treat as Docker Desktop (use `/run/host-services/ssh-auth.sock`).
+4. On Linux, or if runtime is `podman`: use `$SSH_AUTH_SOCK`. Fail with platform-specific guidance if unset or missing.
 
-### macOS + Docker Desktop detection
-
-Docker Desktop is identified when the platform is macOS (`uname -s` = `Darwin`) and the container runtime is `docker` (not overridden to podman). Colima users set `CONTAINER_RUNTIME=podman` or the detected runtime resolves to podman, distinguishing them from Docker Desktop users.
-
-Edge case: macOS users running Docker via Colima with the `docker` CLI (Colima can expose a Docker-compatible socket). These users will have `CONTAINER_RUNTIME` unset and `docker` on PATH. The Docker Desktop socket `/run/host-services/ssh-auth.sock` won't exist in their containers. This is caught at the verification step, which will diagnose the issue and suggest using `$SSH_AUTH_SOCK` instead. A future enhancement could detect Colima explicitly.
+This approach reliably distinguishes Docker Desktop from Colima even when both expose a `docker` CLI.
 
 ## Host Diagnostics
 
@@ -45,7 +43,7 @@ Before configuring, `devc ssh` validates the host SSH agent is reachable.
 **macOS + Docker Desktop:**
 - Skip `SSH_AUTH_SOCK` check — Docker Desktop provides its own socket.
 
-**All other platforms:**
+**All other platforms (Colima, Linux Docker, Podman):**
 - Check `$SSH_AUTH_SOCK` is set. If not: error with guidance ("No SSH agent detected. Start one with: `eval $(ssh-agent -s)` then `ssh-add`").
 - Check the socket file exists at that path. If not: error ("SSH_AUTH_SOCK points to `<path>` but the file doesn't exist. Your agent may have died. Restart with: `eval $(ssh-agent -s)`").
 - Run `ssh-add -l` to check for loaded keys. If none: warning (not error) ("SSH agent is running but has no keys loaded. Run `ssh-add` to add your keys."). Setup proceeds.
@@ -72,12 +70,14 @@ If the mount source path or env var value doesn't match what platform detection 
 
 When changes are needed, `devc ssh` modifies `devcontainer.json`:
 
-**Mount:** Added via existing `update_devcontainer_mounts()`:
+**Mount:** Added by calling `update_devcontainer_mounts()` directly from `cmd_ssh()`. This bypasses `cmd_mount()`'s host path validation (which uses `cd` to resolve paths), since the Docker Desktop socket path `/run/host-services/ssh-auth.sock` exists inside the VM, not on the host filesystem. The `update_devcontainer_mounts()` helper itself only does `jq` manipulation and does not validate paths.
+
 ```
 source=<platform-specific-socket>,target=/tmp/ssh-agent.sock,type=bind
 ```
 
-**Environment variable:** Added via new `update_devcontainer_env()` helper:
+**Environment variable:** Added via new `update_devcontainer_env()` helper. This merges the key into the existing `.containerEnv` object (preserving all other env vars) using `jq`:
+
 ```json
 "containerEnv": {
   "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
@@ -112,13 +112,17 @@ After configuration (or immediately if already configured), `devc ssh` verifies 
 
 If the container is not running, skip verification with: "Container is not running. Changes will take effect on next `devc up`."
 
+## Out of Scope
+
+- `devc ssh --remove` or undo functionality — deferred to a future enhancement if needed.
+
 ## Implementation Scope
 
 All changes are in `install.sh`. No changes to `Dockerfile`, `devcontainer.json` template, or `post_install.py`.
 
 **New code:**
 - `cmd_ssh()` — main command function
-- `update_devcontainer_env()` — helper to add/update a key in `.containerEnv` via `jq`
+- `update_devcontainer_env()` — helper to add/update a key in `.containerEnv` via `jq` (merges into existing object)
 
 **Modified code:**
 - Command dispatch `case` statement — add `ssh)`
@@ -129,7 +133,8 @@ All changes are in `install.sh`. No changes to `Dockerfile`, `devcontainer.json`
 
 Manual validation (consistent with project's existing approach):
 1. macOS + Docker Desktop: run `devc ssh`, verify `ssh-add -l` works in container
-2. Run `devc ssh` twice — second run should detect existing config and skip to verify
-3. Remove env var manually, run `devc ssh` — should detect partial state and fix
-4. Stop host agent, run `devc ssh` — should show diagnostic guidance
-5. Verify SSH mount survives `devc template` update (mount preservation system)
+2. macOS + Colima: run `devc ssh`, verify Colima is correctly detected via `docker context inspect`
+3. Run `devc ssh` twice — second run should detect existing config and skip to verify
+4. Remove env var manually, run `devc ssh` — should detect partial state and fix
+5. Stop host agent, run `devc ssh` — should show diagnostic guidance
+6. Verify SSH mount survives `devc template` update (mount preservation system)
