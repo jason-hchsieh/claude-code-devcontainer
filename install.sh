@@ -454,6 +454,60 @@ cmd_mount() {
   log_success "Mount added: $host_path → $container_path"
 }
 
+SSH_CONTAINER_TARGET="/tmp/ssh-agent.sock"
+
+# Verify SSH agent forwarding works inside the container
+verify_ssh_agent() {
+  local workspace_folder="$1"
+
+  # Check if container is running
+  local label="devcontainer.local_folder=$workspace_folder"
+  local container_id
+  container_id=$($CONTAINER_RUNTIME ps -q --filter "label=$label" 2>/dev/null || true)
+
+  if [[ -z "$container_id" ]]; then
+    log_info "Container is not running. Changes will take effect on next 'devc up'."
+    return 0
+  fi
+
+  log_info "Verifying SSH agent forwarding..."
+
+  # Check socket exists in container
+  if ! "${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" \
+    test -e "$SSH_CONTAINER_TARGET" 2>/dev/null; then
+    log_error "Socket not mounted at $SSH_CONTAINER_TARGET inside container."
+    log_info "Try 'devc ssh' again or 'devc rebuild'."
+    return 1
+  fi
+
+  # Check SSH agent responds
+  local ssh_output
+  ssh_output=$("${DEVCONTAINER_CMD[@]}" exec "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" \
+    env "SSH_AUTH_SOCK=$SSH_CONTAINER_TARGET" ssh-add -l 2>&1) || true
+
+  if echo "$ssh_output" | grep -q "Could not open a connection"; then
+    local os
+    os="$(uname -s)"
+    if [[ "$os" == "Darwin" && "$SSH_SOCKET_SOURCE" == "/run/host-services/ssh-auth.sock" ]]; then
+      log_error "Connection refused. In Docker Desktop, check that SSH agent forwarding is enabled."
+    else
+      log_error "Host SSH agent may have stopped. Check 'ssh-add -l' on the host."
+    fi
+    return 1
+  fi
+
+  if echo "$ssh_output" | grep -q "The agent has no identities"; then
+    log_warn "SSH agent is reachable but no keys loaded. Run 'ssh-add' on the host."
+    return 0
+  fi
+
+  log_success "SSH agent forwarding is working"
+  # Print each key
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && log_info "  $line"
+  done <<< "$ssh_output"
+}
+
 cmd_sync() {
   local filter=""
   local trusted=false
