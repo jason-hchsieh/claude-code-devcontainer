@@ -508,6 +508,74 @@ verify_ssh_agent() {
   done <<< "$ssh_output"
 }
 
+cmd_ssh() {
+  local workspace_folder
+  workspace_folder="$(get_workspace_folder)"
+  local devcontainer_json="$workspace_folder/.devcontainer/devcontainer.json"
+
+  if [[ ! -f "$devcontainer_json" ]]; then
+    log_error "No devcontainer.json found. Run 'devc template' first."
+    exit 1
+  fi
+
+  check_devcontainer_cli
+
+  # Detect platform-specific socket
+  if ! detect_ssh_socket; then
+    exit 1
+  fi
+
+  # Check existing state in devcontainer.json
+  local has_mount="false"
+  local has_env="false"
+  local current_mount_source=""
+  local needs_changes="false"
+
+  # Check if mount targeting SSH_CONTAINER_TARGET exists
+  current_mount_source=$(jq -r --arg target "$SSH_CONTAINER_TARGET" '
+    .mounts // [] | map(select(contains("target=" + $target))) | .[0] // ""
+  ' "$devcontainer_json")
+  [[ -n "$current_mount_source" ]] && has_mount="true"
+
+  # Check if containerEnv.SSH_AUTH_SOCK is set
+  local current_env
+  current_env=$(jq -r '.containerEnv.SSH_AUTH_SOCK // ""' "$devcontainer_json")
+  [[ "$current_env" == "$SSH_CONTAINER_TARGET" ]] && has_env="true"
+
+  # Determine what needs to change
+  if [[ "$has_mount" == "false" ]]; then
+    needs_changes="true"
+    log_info "Adding SSH agent socket mount: $SSH_SOCKET_SOURCE -> $SSH_CONTAINER_TARGET"
+    update_devcontainer_mounts "$devcontainer_json" "$SSH_SOCKET_SOURCE" "$SSH_CONTAINER_TARGET" "false"
+  else
+    # Check if mount source matches expected
+    if [[ "$current_mount_source" != *"source=${SSH_SOCKET_SOURCE},"* ]]; then
+      needs_changes="true"
+      log_warn "SSH mount source changed. Updating: $SSH_SOCKET_SOURCE -> $SSH_CONTAINER_TARGET"
+      update_devcontainer_mounts "$devcontainer_json" "$SSH_SOCKET_SOURCE" "$SSH_CONTAINER_TARGET" "false"
+    else
+      log_info "SSH agent socket mount already configured"
+    fi
+  fi
+
+  if [[ "$has_env" == "false" ]]; then
+    needs_changes="true"
+    log_info "Setting SSH_AUTH_SOCK=$SSH_CONTAINER_TARGET in containerEnv"
+    update_devcontainer_env "$devcontainer_json" "SSH_AUTH_SOCK" "$SSH_CONTAINER_TARGET"
+  else
+    log_info "SSH_AUTH_SOCK already set in containerEnv"
+  fi
+
+  # Recreate container if changes were made
+  if [[ "$needs_changes" == "true" ]]; then
+    log_info "Recreating container with SSH agent forwarding..."
+    "${DEVCONTAINER_CMD[@]}" up "${DOCKER_PATH_ARGS[@]}" --workspace-folder "$workspace_folder" --remove-existing-container
+  fi
+
+  # Verify SSH agent inside container
+  verify_ssh_agent "$workspace_folder"
+}
+
 cmd_sync() {
   local filter=""
   local trusted=false
