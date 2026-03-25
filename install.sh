@@ -650,6 +650,89 @@ verify_ssh_agent() {
   done <<< "$ssh_output"
 }
 
+# Configure git commit signing inside the container using the host SSH key.
+# Reads the host gitconfig's signingkey, resolves the public key content,
+# and writes user.signingkey + commit.gpgsign into .gitconfig.local via exec.
+# No-ops silently if the host does not have SSH signing configured.
+configure_git_signing() {
+  local workspace_folder="$1"
+
+  # Skip if host does not have commit signing enabled
+  local gpgsign
+  gpgsign=$(git config --global commit.gpgsign 2>/dev/null || true)
+  if [[ "${gpgsign,,}" != "true" ]]; then
+    return 0
+  fi
+
+  # Skip if no signing key configured
+  local signing_key
+  signing_key=$(git config --global user.signingkey 2>/dev/null || true)
+  if [[ -z "$signing_key" ]]; then
+    return 0
+  fi
+
+  # Resolve public key content
+  local key_literal
+  if [[ "$signing_key" == key::* ]]; then
+    # Already a literal key
+    key_literal="$signing_key"
+  elif [[ -f "$signing_key" ]]; then
+    # Validate it looks like a public key before reading
+    # (guards against user.signingkey accidentally pointing to a private key)
+    local first_line
+    first_line=$(head -1 "$signing_key" | tr -d '\r')
+    if ! echo "$first_line" | grep -qE '^(ssh-|ecdsa-|sk-)'; then
+      log_warn "Signing key $signing_key does not appear to be a public key — skipping signing config"
+      return 0
+    fi
+    key_literal="key::${first_line}"
+  else
+    log_warn "SSH signing key not found: $signing_key — skipping signing config"
+    return 0
+  fi
+
+  # Check container is running
+  local label="devcontainer.local_folder=$workspace_folder"
+  local container_id
+  container_id=$($CONTAINER_RUNTIME ps -q --filter "label=$label" 2>/dev/null || true)
+  if [[ -z "$container_id" ]]; then
+    return 0
+  fi
+
+  # Resolve container home directory dynamically (container user may not be vscode)
+  local container_home
+  container_home=$("${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    sh -c 'echo $HOME' 2>/dev/null)
+  if [[ -z "$container_home" ]]; then
+    log_warn "Could not resolve container home; falling back to /home/vscode"
+    container_home="/home/vscode"
+  fi
+
+  local gitconfig_local="${container_home}/.gitconfig.local"
+
+  # Write signing key and re-enable gpgsign in .gitconfig.local
+  local failed=0
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    git config --file "$gitconfig_local" user.signingkey "$key_literal" 2>/dev/null || failed=1
+
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    git config --file "$gitconfig_local" commit.gpgsign true 2>/dev/null || failed=1
+
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    git config --file "$gitconfig_local" gpg.format ssh 2>/dev/null || failed=1
+
+  if [[ "$failed" -eq 1 ]]; then
+    log_error "Failed to write git signing config into container. Is the container running?"
+    return 1
+  fi
+
+  log_success "Git commit signing configured (key: ${signing_key##*/})"
+}
+
 cmd_ssh() {
   local workspace_folder
   workspace_folder="$(get_workspace_folder)"
@@ -724,8 +807,10 @@ cmd_ssh() {
     "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" --remove-existing-container
   fi
 
-  # Verify SSH agent inside container
-  verify_ssh_agent "$workspace_folder"
+  # Verify SSH agent inside container; configure signing only if agent is reachable
+  if verify_ssh_agent "$workspace_folder"; then
+    configure_git_signing "$workspace_folder"
+  fi
 }
 
 cmd_ssh_stop() {
