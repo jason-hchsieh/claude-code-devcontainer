@@ -12,7 +12,7 @@ while [[ -L "$SOURCE" ]]; do
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
-SCRIPT_NAME="$(basename "$0")"
+SCRIPT_NAME="$(basename "$SOURCE")"
 
 # Colors for output
 RED='\033[0;31m'
@@ -32,11 +32,11 @@ Commands:
     down                Stop the devcontainer
     shell               Open a shell in the running container
     self-install        Install 'devc' command to ~/.local/bin
-    self-update         Pull latest code and re-install devc (alias: update)
+    update              Pull latest code and re-install devc
     completion          Output shell completion script
     template [dir]      Copy devcontainer template to directory (default: current)
     exec <cmd>          Execute a command in the running container
-    upgrade             Upgrade Claude Code to latest version
+    claude-update       Upgrade Claude Code to latest version
     mount <host> <cont> Add a mount to the devcontainer (recreates container)
     ssh                 Configure SSH agent forwarding in the container
     ssh-stop            Stop the SSH agent tunnel (Podman Machine only)
@@ -51,10 +51,10 @@ Examples:
     devc rebuild                # Clean rebuild
     devc shell                  # Open interactive shell
     devc self-install           # Install devc to PATH
-    devc self-update            # Pull latest and re-install (or: devc update)
+    devc update                 # Pull latest and re-install
     devc completion             # Print shell completion script
     devc exec ls -la            # Run command in container
-    devc upgrade                # Upgrade Claude Code to latest
+    devc claude-update          # Upgrade Claude Code to latest
     devc mount ~/data /data     # Add mount to container
     devc ssh                    # Set up SSH agent forwarding
     devc ssh-stop               # Stop SSH agent tunnel
@@ -1143,7 +1143,7 @@ _devc() {
     'down:Stop the devcontainer'
     'shell:Open a shell in the container'
     'exec:Execute a command in the container'
-    'upgrade:Upgrade Claude Code'
+    'claude-update:Upgrade Claude Code'
     'mount:Add a bind mount'
     'ssh:Configure SSH agent forwarding'
     'ssh-stop:Stop SSH agent tunnel'
@@ -1152,8 +1152,7 @@ _devc() {
     'destroy:Remove container, volumes, and image'
     'template:Copy devcontainer template'
     'self-install:Install devc to PATH'
-    'self-update:Pull latest and re-install devc'
-    'update:Update devc to latest version'
+    'update:Pull latest and re-install devc'
     'completion:Output shell completion script'
     'help:Show help message'
   )
@@ -1181,7 +1180,7 @@ COMP
   *)
     cat <<'COMP'
 _devc_completions() {
-  local commands=". up rebuild down shell exec upgrade mount ssh ssh-stop sync cp destroy template self-install self-update update completion help"
+  local commands=". up rebuild down shell exec claude-update mount ssh ssh-stop sync cp destroy template self-install update completion help"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=($(compgen -W "$commands" -- "${COMP_WORDS[1]}"))
   fi
@@ -1395,7 +1394,7 @@ main() {
     [[ "${1:-}" == "--" ]] && shift
     cmd_exec "$@"
     ;;
-  upgrade)
+  claude-update)
     cmd_upgrade
     ;;
   mount)
@@ -1416,7 +1415,7 @@ main() {
   self-install)
     cmd_self_install
     ;;
-  self-update | update)
+  update)
     cmd_self_update
     ;;
   completion)
