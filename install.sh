@@ -733,6 +733,64 @@ configure_git_signing() {
   log_success "Git commit signing configured (key: ${signing_key##*/})"
 }
 
+# Sync host ~/.ssh/known_hosts into the container so non-interactive SSH
+# connections (e.g. git clone via skills CLI) don't hang on host key prompts.
+# Merges host entries with any existing container known_hosts (deduplicates).
+# No-ops if the host has no known_hosts file or the container is not running.
+sync_known_hosts() {
+  local workspace_folder="$1"
+  local host_known_hosts="$HOME/.ssh/known_hosts"
+
+  if [[ ! -f "$host_known_hosts" ]]; then
+    log_info "No ~/.ssh/known_hosts on host; skipping known_hosts sync"
+    return 0
+  fi
+
+  # Check container is running
+  local label="devcontainer.local_folder=$workspace_folder"
+  local container_id
+  container_id=$($CONTAINER_RUNTIME ps -q --filter "label=$label" 2>/dev/null || true)
+  if [[ -z "$container_id" ]]; then
+    return 0
+  fi
+
+  # Resolve container home directory dynamically
+  local container_home
+  container_home=$("${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    sh -c 'echo $HOME' 2>/dev/null)
+  if [[ -z "$container_home" ]]; then
+    container_home="/home/vscode"
+  fi
+
+  local container_known_hosts="${container_home}/.ssh/known_hosts"
+
+  # Ensure ~/.ssh exists with correct permissions
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    sh -c "mkdir -p ${container_home}/.ssh && chmod 700 ${container_home}/.ssh" 2>/dev/null || true
+
+  # Copy host known_hosts into container, then merge with any existing entries
+  local tmp_dest="${container_known_hosts}.host"
+  if ! $CONTAINER_RUNTIME cp "$host_known_hosts" "${container_id}:${tmp_dest}" 2>/dev/null; then
+    log_warn "Failed to copy known_hosts into container"
+    return 0
+  fi
+
+  "${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    sh -c "{ cat '$container_known_hosts' 2>/dev/null; cat '$tmp_dest'; } | sort -u > '${container_known_hosts}.tmp' \
+      && mv '${container_known_hosts}.tmp' '$container_known_hosts' \
+      && chmod 600 '$container_known_hosts' \
+      && rm -f '$tmp_dest'" 2>/dev/null || {
+    log_warn "Failed to merge known_hosts in container"
+    $CONTAINER_RUNTIME exec "$container_id" rm -f "$tmp_dest" 2>/dev/null || true
+    return 0
+  }
+
+  log_success "SSH known_hosts synced into container"
+}
+
 cmd_ssh() {
   local workspace_folder
   workspace_folder="$(get_workspace_folder)"
@@ -811,6 +869,9 @@ cmd_ssh() {
   if verify_ssh_agent "$workspace_folder"; then
     configure_git_signing "$workspace_folder"
   fi
+
+  # Sync host known_hosts so non-interactive SSH clones don't hang on key prompts
+  sync_known_hosts "$workspace_folder"
 }
 
 cmd_ssh_stop() {

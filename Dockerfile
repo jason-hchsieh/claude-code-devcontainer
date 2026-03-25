@@ -6,8 +6,6 @@ FROM mcr.microsoft.com/devcontainers/base:ubuntu24.04@sha256:4bcb1b466771b1ba1ea
 ARG TZ
 ENV TZ="$TZ"
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
 # Install additional system packages (base image already includes git, curl, sudo, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
   # Sandboxing support for Claude Code
