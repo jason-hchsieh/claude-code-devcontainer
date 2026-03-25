@@ -194,6 +194,33 @@ def fix_directory_ownership():
                 )
 
 
+def _host_signing_needs_override(host_gitconfig: Path) -> bool:
+    """Return True if host gitconfig uses SSH signing with a file-path key
+    that won't be resolvable inside the container."""
+    def git_cfg(key: str) -> str:
+        result = subprocess.run(
+            ["git", "config", "--file", str(host_gitconfig), key],
+            capture_output=True, text=True
+        )
+        return result.stdout.strip()
+
+    try:
+        # Note: only checks for "true"; git also accepts "yes", "1", "on" as truthy.
+        # These are rare in practice; if needed, use `git config --type=bool`.
+        if git_cfg("commit.gpgsign").lower() != "true":
+            return False
+        signing_key = git_cfg("user.signingkey")
+        if not signing_key:
+            return False
+        # key:: prefix means it's a literal — already resolvable, no override needed
+        if signing_key.startswith("key::"):
+            return False
+        # Otherwise treat as a file path; check if it exists in the container
+        return not Path(signing_key).exists()
+    except (FileNotFoundError, OSError):
+        return False
+
+
 def setup_global_gitignore():
     """Set up global gitignore and local git config.
 
@@ -261,6 +288,15 @@ node_modules/
         print(f"[post_install] Local git config exists, skipping: {local_gitconfig}", file=sys.stderr)
         return
 
+    signing_override = ""
+    if _host_signing_needs_override(host_gitconfig):
+        signing_override = "\n[commit]\n    gpgsign = false\n"
+        print(
+            "[post_install] Host uses SSH signing with unresolvable key path — "
+            "disabling gpgsign in container (run 'devc ssh' to re-enable)",
+            file=sys.stderr,
+        )
+
     local_config = f"""\
 # Container-local git config
 # Includes host config (mounted read-only) and adds container settings
@@ -289,7 +325,7 @@ node_modules/
 
 [gpg "ssh"]
     program = /usr/bin/ssh-keygen
-"""
+{signing_override}"""
     local_gitconfig.write_text(local_config, encoding="utf-8")
     print(
         f"[post_install] Local git config created: {local_gitconfig}", file=sys.stderr
