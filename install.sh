@@ -99,38 +99,29 @@ _setup_podman() {
   fi
 }
 
-# Identify the Docker-compatible engine behind the `docker` CLI.
-# Returns a human-readable name: "Docker Desktop", "OrbStack", "Colima", or "Docker".
-_identify_docker_engine() {
+DOCKER_ENGINE=""
+
+_detect_docker_engine() {
   local os_info
-  os_info=$(docker info -f '{{.OperatingSystem}}' 2>/dev/null || true)
+  os_info=$(docker info -f '{{.OperatingSystem}}' 2>/dev/null) || return 1
   case "$os_info" in
-    *OrbStack*)       echo "OrbStack" ;;
-    *Docker\ Desktop*) echo "Docker Desktop" ;;
-    *colima*|*Colima*) echo "Colima" ;;
-    *)                 echo "Docker" ;;
+    *OrbStack*)       DOCKER_ENGINE="OrbStack" ;;
+    *Docker\ Desktop*) DOCKER_ENGINE="Docker Desktop" ;;
+    *colima*|*Colima*) DOCKER_ENGINE="Colima" ;;
+    *)                 DOCKER_ENGINE="Docker" ;;
   esac
 }
 
-# Check whether the docker CLI is usable without sudo.
-_docker_is_accessible() {
-  docker info &>/dev/null 2>&1
-}
-
 detect_container_runtime() {
-  # Honour explicit override
   if [[ -n "$CONTAINER_RUNTIME" ]]; then
     [[ "$CONTAINER_RUNTIME" == "podman" ]] && _setup_podman
     return
   fi
 
-  # Discover every available runtime
   local -a available=()
 
-  if command -v docker &>/dev/null && _docker_is_accessible; then
-    local engine
-    engine=$(_identify_docker_engine)
-    available+=("docker:$engine")
+  if command -v docker &>/dev/null && _detect_docker_engine; then
+    available+=("docker:$DOCKER_ENGINE")
   fi
 
   if command -v podman &>/dev/null; then
@@ -147,35 +138,31 @@ detect_container_runtime() {
   fi
 
   if [[ ${#available[@]} -eq 1 ]]; then
-    local choice="${available[0]}"
-    CONTAINER_RUNTIME="${choice%%:*}"
-    [[ "$CONTAINER_RUNTIME" == "podman" ]] && _setup_podman
-    return
+    CONTAINER_RUNTIME="${available[0]%%:*}"
+  else
+    log_info "Multiple container runtimes detected:"
+    local i=1
+    for entry in "${available[@]}"; do
+      echo "  $i) ${entry#*:} (${entry%%:*})"
+      ((i++))
+    done
+
+    local selection
+    while true; do
+      printf "%b" "${BLUE}[devc]${NC} Select runtime [1-${#available[@]}]: "
+      read -r -t 30 selection || { log_error "Timeout waiting for input."; exit 1; }
+      if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection >= 1 && selection <= ${#available[@]} )); then
+        break
+      fi
+      echo "  Invalid selection. Enter a number between 1 and ${#available[@]}."
+    done
+
+    local picked="${available[$((selection - 1))]}"
+    CONTAINER_RUNTIME="${picked%%:*}"
+    log_info "Using ${picked#*:} (${CONTAINER_RUNTIME})"
   fi
 
-  # Multiple runtimes available — ask the user
-  log_info "Multiple container runtimes detected:"
-  local i=1
-  for entry in "${available[@]}"; do
-    local label="${entry#*:}"
-    echo "  $i) $label (${entry%%:*})"
-    ((i++))
-  done
-
-  local selection
-  while true; do
-    printf "%b" "${BLUE}[devc]${NC} Select runtime [1-${#available[@]}]: "
-    read -r selection
-    if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection >= 1 && selection <= ${#available[@]} )); then
-      break
-    fi
-    echo "  Invalid selection. Enter a number between 1 and ${#available[@]}."
-  done
-
-  local picked="${available[$((selection - 1))]}"
-  CONTAINER_RUNTIME="${picked%%:*}"
   [[ "$CONTAINER_RUNTIME" == "podman" ]] && _setup_podman
-  log_info "Using ${picked#*:} (${CONTAINER_RUNTIME})"
 }
 
 detect_devcontainer_cli() {
@@ -315,15 +302,9 @@ detect_ssh_socket() {
   os="$(uname -s)"
 
   # macOS + Docker Desktop: uses a built-in socket
-  # Positively identify Docker Desktop by its OS string to avoid false
-  # matches with OrbStack, Colima, or other Docker-compatible engines.
-  if [[ "$os" == "Darwin" && "$CONTAINER_RUNTIME" == "docker" ]]; then
-    local docker_os
-    docker_os=$(docker info -f '{{.OperatingSystem}}' 2>/dev/null || true)
-    if [[ "$docker_os" == *"Docker Desktop"* ]]; then
-      SSH_SOCKET_SOURCE="$DOCKER_DESKTOP_SSH_SOCK"
-      return 0
-    fi
+  if [[ "$os" == "Darwin" && "$CONTAINER_RUNTIME" == "docker" && "$DOCKER_ENGINE" == "Docker Desktop" ]]; then
+    SSH_SOCKET_SOURCE="$DOCKER_DESKTOP_SSH_SOCK"
+    return 0
   fi
 
   # macOS + Podman Machine: tunnel agent into VM via SSH -R
