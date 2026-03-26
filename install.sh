@@ -26,7 +26,7 @@ print_usage() {
 Usage: devc <command> [options]
 
 Commands:
-    .                   Install devcontainer template to current directory and start
+    init                Install devcontainer template to current directory and start
     up                  Start the devcontainer in current directory
     rebuild             Rebuild the devcontainer (preserves auth volumes)
     down                Stop the devcontainer
@@ -46,7 +46,7 @@ Commands:
     help                Show this help message
 
 Examples:
-    devc .                      # Install template and start container
+    devc init                   # Install template and start container
     devc up                     # Start container in current directory
     devc rebuild                # Clean rebuild
     devc shell                  # Open interactive shell
@@ -1259,7 +1259,7 @@ COMP
   fi
 }
 
-cmd_dot() {
+cmd_init() {
   # Install template and start container in one command
   cmd_template "."
   cmd_up "."
@@ -1429,12 +1429,12 @@ main() {
   shift
 
   case "$command" in
-  .)
+  init)
     if [[ $# -gt 0 ]]; then
-      log_error "'devc .' does not accept arguments (it always targets the current directory)"
+      log_error "'devc init' does not accept arguments (it always targets the current directory)"
       exit 1
     fi
-    cmd_dot
+    cmd_init
     ;;
   up)
     cmd_up "$@"
