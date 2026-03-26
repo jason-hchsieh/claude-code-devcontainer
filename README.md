@@ -75,7 +75,7 @@ Each project gets its own container with independent volumes. Best for one-off r
 ```bash
 git clone <untrusted-repo>
 cd untrusted-repo
-devc .          # Installs template + starts container
+devc init          # Installs template + starts container
 devc shell      # Opens shell in container
 ```
 
@@ -89,7 +89,7 @@ devc shell      # Opens shell in container
 
    ```bash
    # Option A: Use devc (recommended)
-   devc .
+   devc init
 
    # Option B: Clone manually
    git clone https://github.com/jason-hchsieh/claude-code-devcontainer .devcontainer/
@@ -107,7 +107,7 @@ A parent directory contains the devcontainer config, and you clone multiple repo
 # Create workspace for a client engagement
 mkdir -p ~/sandbox/client-name
 cd ~/sandbox/client-name
-devc .          # Install template + start container
+devc init          # Install template + start container
 devc shell      # Opens shell in container
 
 # Inside container:
@@ -136,7 +136,7 @@ If you don't set a token, the interactive login flow works as before.
 ## CLI Helper Commands
 
 ```
-devc .              Install template + start container in current directory
+devc init              Install template + start container in current directory
 devc up             Start the devcontainer
 devc rebuild        Rebuild container (preserves persistent volumes)
 devc destroy [-f]   Remove container, volumes, and image for current project
@@ -240,23 +240,19 @@ The container auto-configures `bypassPermissions` mode—Claude runs commands wi
 
 Volumes are stored outside the container, so your shell history, Claude settings, and `gh` login persist even after `devc rebuild`. Host `~/.gitconfig` is mounted read-only for git identity.
 
-## Using Podman
+## Container Runtime
 
-Pass `CONTAINER_RUNTIME=podman` to any `devc` command:
+`devc` automatically detects available runtimes (Docker Desktop, OrbStack, Colima, Podman). When multiple runtimes are found, it prompts you to choose. If Docker is installed but requires `sudo`, it will be skipped with a helpful message.
 
-```bash
-CONTAINER_RUNTIME=podman devc .
-CONTAINER_RUNTIME=podman devc shell
-CONTAINER_RUNTIME=podman devc rebuild
-```
-
-To avoid typing it every time, export it in your shell profile:
+To skip the prompt, set `CONTAINER_RUNTIME` explicitly:
 
 ```bash
-export CONTAINER_RUNTIME=podman
+export CONTAINER_RUNTIME=podman   # or: docker
 ```
 
-`devc` will automatically set `--docker-path podman` for the devcontainer CLI and configure `DOCKER_HOST` to point to the Podman socket (`unix:///run/user/<uid>/podman/podman.sock`) if it isn't already set.
+### Using Podman
+
+When Podman is selected, `devc` will automatically set `--docker-path podman` for the devcontainer CLI and configure `DOCKER_HOST` to point to the Podman socket (`unix:///run/user/<uid>/podman/podman.sock`) if it isn't already set.
 
 ## Troubleshooting
 

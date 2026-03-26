@@ -99,20 +99,83 @@ _setup_podman() {
   fi
 }
 
+# Identify the Docker-compatible engine behind the `docker` CLI.
+# Returns a human-readable name: "Docker Desktop", "OrbStack", "Colima", or "Docker".
+_identify_docker_engine() {
+  local os_info
+  os_info=$(docker info -f '{{.OperatingSystem}}' 2>/dev/null || true)
+  case "$os_info" in
+    *OrbStack*)       echo "OrbStack" ;;
+    *Docker\ Desktop*) echo "Docker Desktop" ;;
+    *colima*|*Colima*) echo "Colima" ;;
+    *)                 echo "Docker" ;;
+  esac
+}
+
+# Check whether the docker CLI is usable without sudo.
+_docker_is_accessible() {
+  docker info &>/dev/null 2>&1
+}
+
 detect_container_runtime() {
+  # Honour explicit override
   if [[ -n "$CONTAINER_RUNTIME" ]]; then
     [[ "$CONTAINER_RUNTIME" == "podman" ]] && _setup_podman
     return
   fi
-  if command -v docker &>/dev/null; then
-    CONTAINER_RUNTIME="docker"
-  elif command -v podman &>/dev/null; then
-    CONTAINER_RUNTIME="podman"
-    _setup_podman
-  else
-    log_error "No container runtime found. Install Docker or Podman."
+
+  # Discover every available runtime
+  local -a available=()
+
+  if command -v docker &>/dev/null && _docker_is_accessible; then
+    local engine
+    engine=$(_identify_docker_engine)
+    available+=("docker:$engine")
+  fi
+
+  if command -v podman &>/dev/null; then
+    available+=("podman:Podman")
+  fi
+
+  if [[ ${#available[@]} -eq 0 ]]; then
+    if command -v docker &>/dev/null; then
+      log_error "Docker found but cannot connect. Check the daemon is running or your user has permission (try: sudo usermod -aG docker \$USER)."
+    else
+      log_error "No container runtime found. Install Docker, OrbStack, Colima, or Podman."
+    fi
     exit 1
   fi
+
+  if [[ ${#available[@]} -eq 1 ]]; then
+    local choice="${available[0]}"
+    CONTAINER_RUNTIME="${choice%%:*}"
+    [[ "$CONTAINER_RUNTIME" == "podman" ]] && _setup_podman
+    return
+  fi
+
+  # Multiple runtimes available — ask the user
+  log_info "Multiple container runtimes detected:"
+  local i=1
+  for entry in "${available[@]}"; do
+    local label="${entry#*:}"
+    echo "  $i) $label (${entry%%:*})"
+    ((i++))
+  done
+
+  local selection
+  while true; do
+    printf "%b" "${BLUE}[devc]${NC} Select runtime [1-${#available[@]}]: "
+    read -r selection
+    if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection >= 1 && selection <= ${#available[@]} )); then
+      break
+    fi
+    echo "  Invalid selection. Enter a number between 1 and ${#available[@]}."
+  done
+
+  local picked="${available[$((selection - 1))]}"
+  CONTAINER_RUNTIME="${picked%%:*}"
+  [[ "$CONTAINER_RUNTIME" == "podman" ]] && _setup_podman
+  log_info "Using ${picked#*:} (${CONTAINER_RUNTIME})"
 }
 
 detect_devcontainer_cli() {
