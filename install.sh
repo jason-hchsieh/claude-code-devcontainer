@@ -26,7 +26,7 @@ print_usage() {
 Usage: devc <command> [options]
 
 Commands:
-    init                Install devcontainer template to current directory and start
+    init [--quick]      Install template, configure features, and start container
     up                  Start the devcontainer in current directory
     rebuild             Rebuild the devcontainer (preserves auth volumes)
     down                Stop the devcontainer
@@ -48,7 +48,8 @@ Commands:
     help                Show this help message
 
 Examples:
-    devc init                   # Install template and start container
+    devc init                   # Install template, configure features, start container
+    devc init --quick            # Same, but auto-enable detected features (no prompts)
     devc up                     # Start container in current directory
     devc rebuild                # Clean rebuild
     devc shell                  # Open interactive shell
@@ -1460,9 +1461,134 @@ COMP
 }
 
 cmd_init() {
-  # Install template and start container in one command
+  local quick=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --quick) quick=true; shift ;;
+      *) break ;;
+    esac
+  done
+
+  # 1. Install template
   cmd_template "."
+
+  local workspace_folder
+  workspace_folder="$(cd "." && pwd)"
+  local devcontainer_json="$workspace_folder/.devcontainer/devcontainer.json"
+
+  detect_container_runtime
+  check_devcontainer_cli
+
+  # 2. Feature detection & configuration
+  local ssh_enabled=false
+  local peon_enabled=false
+
+  # --- SSH agent forwarding ---
+  local ssh_detected=false
+  if detect_ssh_socket 2>/dev/null; then
+    ssh_detected=true
+  fi
+
+  if [[ "$quick" == true ]]; then
+    if [[ "$ssh_detected" == true ]]; then
+      ssh_enabled=true
+      log_success "SSH forwarding — detected, enabled"
+    else
+      log_info "SSH forwarding — not detected, skipped"
+    fi
+  else
+    if [[ "$ssh_detected" == true ]]; then
+      echo ""
+      log_info "SSH agent forwarding"
+      log_info "  ✔ Detected: $SSH_SOCKET_SOURCE"
+      read -p "  Enable? [Y/n] " -n 1 -r; echo
+      [[ ! $REPLY =~ ^[Nn]$ ]] && ssh_enabled=true
+    else
+      echo ""
+      log_info "SSH agent forwarding"
+      log_info "  ✗ Not detected"
+      read -p "  Enable anyway? [y/N] " -n 1 -r; echo
+      [[ $REPLY =~ ^[Yy]$ ]] && ssh_enabled=true
+    fi
+  fi
+
+  # --- Peon-ping relay ---
+  local relay_host="${PEON_RELAY_HOST:-$PEON_RELAY_HOST_DEFAULT}"
+  local relay_port="${PEON_RELAY_PORT:-$PEON_RELAY_PORT_DEFAULT}"
+  local peon_detected=false
+  if curl -sf --max-time 2 "http://${relay_host}:${relay_port}/health" &>/dev/null; then
+    peon_detected=true
+  fi
+
+  if [[ "$quick" == true ]]; then
+    if [[ "$peon_detected" == true ]]; then
+      peon_enabled=true
+      log_success "Peon-ping — detected, enabled"
+    else
+      log_info "Peon-ping — not detected, skipped"
+    fi
+  else
+    if [[ "$peon_detected" == true ]]; then
+      echo ""
+      log_info "Peon-ping relay"
+      log_info "  ✔ Detected: http://${relay_host}:${relay_port}"
+      read -p "  Enable? [Y/n] " -n 1 -r; echo
+      [[ ! $REPLY =~ ^[Nn]$ ]] && peon_enabled=true
+    else
+      echo ""
+      log_info "Peon-ping relay"
+      log_info "  ✗ Not detected (relay not running on ${relay_host}:${relay_port})"
+      read -p "  Enable anyway? [y/N] " -n 1 -r; echo
+      [[ $REPLY =~ ^[Yy]$ ]] && peon_enabled=true
+    fi
+  fi
+
+  # 3. Apply config before building
+  if [[ "$ssh_enabled" == true ]]; then
+    if [[ "$ssh_detected" != true ]]; then
+      detect_ssh_socket 2>/dev/null || true
+    fi
+    if [[ -n "${SSH_SOCKET_SOURCE:-}" ]]; then
+      update_devcontainer_mounts "$devcontainer_json" "$SSH_SOCKET_SOURCE" "$SSH_CONTAINER_TARGET" "false"
+      update_devcontainer_env "$devcontainer_json" "SSH_AUTH_SOCK" "$SSH_CONTAINER_TARGET"
+      if [[ "$SSH_SOCKET_SOURCE" == "$PODMAN_VM_SSH_SOCK" ]]; then
+        local has_label_disable
+        has_label_disable=$(jq -r '(.runArgs // []) | map(select(. == "--security-opt" or . == "label=disable")) | length' "$devcontainer_json")
+        if [[ "$has_label_disable" -lt 2 ]]; then
+          local updated
+          updated=$(jq '.runArgs = (.runArgs // []) + ["--security-opt", "label=disable"]' "$devcontainer_json")
+          echo "$updated" > "$devcontainer_json"
+        fi
+      fi
+    fi
+  fi
+
+  if [[ "$peon_enabled" == true ]]; then
+    local has_network_host
+    has_network_host=$(jq -r '(.runArgs // []) | map(select(. == "--network=host")) | length' "$devcontainer_json")
+    if [[ "$has_network_host" -eq 0 ]]; then
+      local updated
+      updated=$(jq '.runArgs = (.runArgs // []) + ["--network=host"]' "$devcontainer_json")
+      echo "$updated" > "$devcontainer_json"
+    fi
+    update_devcontainer_env "$devcontainer_json" "PEON_RELAY_HOST" "$relay_host"
+    update_devcontainer_env "$devcontainer_json" "PEON_RELAY_PORT" "$relay_port"
+  fi
+
+  # 4. Build container (once)
+  echo ""
   cmd_up "."
+
+  # 5. Post-build verification
+  if [[ "$ssh_enabled" == true ]]; then
+    if verify_ssh_agent "$workspace_folder" 2>/dev/null; then
+      configure_git_signing "$workspace_folder" 2>/dev/null
+    fi
+    sync_known_hosts "$workspace_folder" 2>/dev/null
+  fi
+  if [[ "$peon_enabled" == true ]]; then
+    verify_peon_relay "$workspace_folder" "$relay_host" "$relay_port" 2>/dev/null
+  fi
 }
 
 # Discovers all Docker resources associated with the current workspace.
@@ -1630,11 +1756,7 @@ main() {
 
   case "$command" in
   init)
-    if [[ $# -gt 0 ]]; then
-      log_error "'devc init' does not accept arguments (it always targets the current directory)"
-      exit 1
-    fi
-    cmd_init
+    cmd_init "$@"
     ;;
   up)
     cmd_up "$@"
