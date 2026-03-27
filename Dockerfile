@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   # Build tools (needed for native Node.js addons and Python C extensions)
   build-essential \
   # Utilities
+  ffmpeg \
   jq \
   nano \
   unzip \
