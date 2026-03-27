@@ -40,6 +40,8 @@ Commands:
     mount <host> <cont> Add a mount to the devcontainer (recreates container)
     ssh                 Configure SSH agent forwarding in the container
     ssh-stop            Stop the SSH agent tunnel (Podman Machine only)
+    peon-ping           Configure peon-ping audio relay (--network=host + relay env vars)
+    peon-ping-stop      Remove peon-ping relay configuration (recreates container)
     sync [project] [--trusted]  Sync sessions from devcontainers to host
     cp <cont> <host>    Copy files/directories from container to host
     destroy [-f] [dir]  Remove container, volumes, and image for a project
@@ -58,6 +60,8 @@ Examples:
     devc mount ~/data /data     # Add mount to container
     devc ssh                    # Set up SSH agent forwarding
     devc ssh-stop               # Stop SSH agent tunnel
+    devc peon-ping              # Enable peon-ping audio relay via SSH tunnel
+    devc peon-ping-stop         # Remove peon-ping relay configuration
     devc sync                   # Sync sessions from all devcontainers
     devc sync crypto            # Sync only matching devcontainer
     devc cp /some/file ./out    # Copy a path from container to host
@@ -922,6 +926,156 @@ cmd_ssh_stop() {
   stop_ssh_tunnel
 }
 
+PEON_RELAY_HOST_DEFAULT="localhost"
+PEON_RELAY_PORT_DEFAULT="19998"
+
+# Verify the peon-ping relay is reachable from inside the container.
+# Expects: curl available in container (base image includes it).
+verify_peon_relay() {
+  local workspace_folder="$1"
+  local relay_host="$2"
+  local relay_port="$3"
+
+  local label="devcontainer.local_folder=$workspace_folder"
+  local container_id
+  container_id=$($CONTAINER_RUNTIME ps -q --filter "label=$label" 2>/dev/null || true)
+
+  if [[ -z "$container_id" ]]; then
+    log_info "Container is not running. Changes will take effect on next 'devc up'."
+    return 0
+  fi
+
+  log_info "Verifying peon-ping relay at http://${relay_host}:${relay_port}/health ..."
+
+  local response
+  response=$("${DEVCONTAINER_CMD[@]}" exec ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} \
+    --workspace-folder "$workspace_folder" \
+    curl -sf --max-time 3 "http://${relay_host}:${relay_port}/health" 2>&1) || true
+
+  if [[ "$response" == *"OK"* ]]; then
+    log_success "Peon-ping relay is reachable (response: ${response})"
+    log_info "Relay chain: container → SSH tunnel → Windows relay.ps1"
+  else
+    log_warn "Peon-ping relay did not return OK (got: '${response:-no response}')"
+    log_info "Check that:"
+    log_info "  1. relay.ps1 is running on Windows (port $relay_port)"
+    log_info "  2. SSH tunnel is active: ssh -R ${relay_port}:127.0.0.1:${relay_port} user@this-server"
+  fi
+}
+
+# Configure peon-ping audio relay for the devcontainer.
+# Adds --network=host to runArgs (so localhost:$port reaches the SSH tunnel)
+# and sets PEON_RELAY_HOST / PEON_RELAY_PORT in containerEnv.
+cmd_peon_ping() {
+  local workspace_folder
+  workspace_folder="$(get_workspace_folder)"
+  local devcontainer_json="$workspace_folder/.devcontainer/devcontainer.json"
+
+  if [[ ! -f "$devcontainer_json" ]]; then
+    log_error "No devcontainer.json found. Run 'devc template' first."
+    exit 1
+  fi
+
+  check_devcontainer_cli
+
+  local relay_host="${PEON_RELAY_HOST:-$PEON_RELAY_HOST_DEFAULT}"
+  local relay_port="${PEON_RELAY_PORT:-$PEON_RELAY_PORT_DEFAULT}"
+  local needs_changes="false"
+
+  # Add --network=host to runArgs if not already present
+  local has_network_host
+  has_network_host=$(jq -r '(.runArgs // []) | map(select(. == "--network=host")) | length' "$devcontainer_json")
+  if [[ "$has_network_host" -eq 0 ]]; then
+    needs_changes="true"
+    log_info "Adding --network=host to runArgs"
+    local updated
+    updated=$(jq '.runArgs = (.runArgs // []) + ["--network=host"]' "$devcontainer_json")
+    echo "$updated" > "$devcontainer_json"
+  else
+    log_info "--network=host already configured"
+  fi
+
+  # Set PEON_RELAY_HOST in containerEnv
+  local current_host
+  current_host=$(jq -r '.containerEnv.PEON_RELAY_HOST // ""' "$devcontainer_json")
+  if [[ "$current_host" != "$relay_host" ]]; then
+    needs_changes="true"
+    log_info "Setting PEON_RELAY_HOST=$relay_host in containerEnv"
+    update_devcontainer_env "$devcontainer_json" "PEON_RELAY_HOST" "$relay_host"
+  else
+    log_info "PEON_RELAY_HOST already set to $relay_host"
+  fi
+
+  # Set PEON_RELAY_PORT in containerEnv
+  local current_port
+  current_port=$(jq -r '.containerEnv.PEON_RELAY_PORT // ""' "$devcontainer_json")
+  if [[ "$current_port" != "$relay_port" ]]; then
+    needs_changes="true"
+    log_info "Setting PEON_RELAY_PORT=$relay_port in containerEnv"
+    update_devcontainer_env "$devcontainer_json" "PEON_RELAY_PORT" "$relay_port"
+  else
+    log_info "PEON_RELAY_PORT already set to $relay_port"
+  fi
+
+  # Recreate container if changes were made
+  if [[ "$needs_changes" == "true" ]]; then
+    log_info "Recreating container with peon-ping relay config..."
+    "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" --remove-existing-container
+  fi
+
+  verify_peon_relay "$workspace_folder" "$relay_host" "$relay_port"
+}
+
+# Remove peon-ping relay configuration from devcontainer.json and recreate.
+cmd_peon_ping_stop() {
+  local workspace_folder
+  workspace_folder="$(get_workspace_folder)"
+  local devcontainer_json="$workspace_folder/.devcontainer/devcontainer.json"
+
+  if [[ ! -f "$devcontainer_json" ]]; then
+    log_error "No devcontainer.json found."
+    exit 1
+  fi
+
+  check_devcontainer_cli
+
+  local needs_changes="false"
+
+  # Remove --network=host from runArgs
+  local has_network_host
+  has_network_host=$(jq -r '(.runArgs // []) | map(select(. == "--network=host")) | length' "$devcontainer_json")
+  if [[ "$has_network_host" -gt 0 ]]; then
+    needs_changes="true"
+    log_info "Removing --network=host from runArgs"
+    local updated
+    updated=$(jq '.runArgs = ((.runArgs // []) | map(select(. != "--network=host")))' "$devcontainer_json")
+    echo "$updated" > "$devcontainer_json"
+  else
+    log_info "--network=host not present, nothing to remove"
+  fi
+
+  # Remove PEON_RELAY_HOST and PEON_RELAY_PORT from containerEnv
+  for key in PEON_RELAY_HOST PEON_RELAY_PORT; do
+    local current_val
+    current_val=$(jq -r --arg k "$key" '.containerEnv[$k] // ""' "$devcontainer_json")
+    if [[ -n "$current_val" ]]; then
+      needs_changes="true"
+      log_info "Removing $key from containerEnv"
+      local updated
+      updated=$(jq --arg k "$key" 'del(.containerEnv[$k])' "$devcontainer_json")
+      echo "$updated" > "$devcontainer_json"
+    fi
+  done
+
+  if [[ "$needs_changes" == "true" ]]; then
+    log_info "Recreating container without peon-ping relay config..."
+    "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" --remove-existing-container
+    log_success "Peon-ping relay configuration removed"
+  else
+    log_info "No peon-ping relay configuration found"
+  fi
+}
+
 cmd_sync() {
   local filter=""
   local trusted=false
@@ -1252,6 +1406,8 @@ _devc() {
     'mount:Add a bind mount'
     'ssh:Configure SSH agent forwarding'
     'ssh-stop:Stop SSH agent tunnel'
+    'peon-ping:Configure peon-ping audio relay'
+    'peon-ping-stop:Remove peon-ping relay configuration'
     'sync:Sync sessions from devcontainers to host'
     'cp:Copy files from container to host'
     'destroy:Remove container, volumes, and image'
@@ -1510,6 +1666,12 @@ main() {
     ;;
   ssh-stop)
     cmd_ssh_stop
+    ;;
+  peon-ping)
+    cmd_peon_ping
+    ;;
+  peon-ping-stop)
+    cmd_peon_ping_stop
     ;;
   sync)
     cmd_sync "$@"
