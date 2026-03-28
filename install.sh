@@ -964,6 +964,26 @@ verify_peon_relay() {
   fi
 }
 
+# Install peon-ping on the host if not already installed.
+install_peon_ping_host() {
+  if command -v peon-ping &>/dev/null; then
+    log_info "peon-ping already installed ($(command -v peon-ping))"
+    return 0
+  fi
+
+  log_info "Installing peon-ping..."
+  if ! command -v curl &>/dev/null; then
+    log_warn "curl not found — skipping peon-ping install (install manually: https://github.com/jason-hchsieh/peon-ping)"
+    return 0
+  fi
+
+  if curl -fsSL https://raw.githubusercontent.com/jason-hchsieh/peon-ping/main/install.sh | bash; then
+    log_success "peon-ping installed"
+  else
+    log_warn "peon-ping install failed — install manually: https://github.com/jason-hchsieh/peon-ping"
+  fi
+}
+
 # Configure peon-ping audio relay for the devcontainer.
 # Adds --network=host to runArgs (so localhost:$port reaches the SSH tunnel)
 # and sets PEON_RELAY_HOST / PEON_RELAY_PORT in containerEnv.
@@ -1024,6 +1044,7 @@ cmd_peon_ping() {
     "${DEVCONTAINER_CMD[@]}" up ${DOCKER_PATH_ARGS[@]+"${DOCKER_PATH_ARGS[@]}"} --workspace-folder "$workspace_folder" --remove-existing-container
   fi
 
+  install_peon_ping_host
   verify_peon_relay "$workspace_folder" "$relay_host" "$relay_port"
 }
 
@@ -1587,6 +1608,7 @@ cmd_init() {
     sync_known_hosts "$workspace_folder" 2>/dev/null
   fi
   if [[ "$peon_enabled" == true ]]; then
+    install_peon_ping_host
     verify_peon_relay "$workspace_folder" "$relay_host" "$relay_port" 2>/dev/null
   fi
 }
